@@ -1,0 +1,27 @@
+# retina-tracker configuration
+# Bistatic radar multi-target tracker for blah2
+
+# Track confirmation (M-of-N logic)
+tracker:
+  m_threshold: 4          # Associations needed to confirm track
+  n_window: 6             # Window for M-of-N logic
+  n_delete: 10            # Missed frames before deletion
+  min_snr: 7.0            # Detection threshold (dB)
+  gate_threshold: 9.0     # Chi-squared gate (99% confidence)
+  detection_window: 20    # Rolling detection window for streaming output
+
+# Process noise (Kalman filter)
+process_noise:
+  delay: 0.1              # Delay process noise
+  doppler: 0.5            # Doppler process noise
+
+# Tracklet initiation thresholds
+tracklet:
+  max_delay_residual: 2.0     # Max delay residual for linear fit
+  max_doppler_residual: 10.0  # Max Doppler residual for linear fit
+  max_time_span: 3.0          # Max seconds for 3 detections
+
+# Paths (relative to repo root)
+paths:
+  data_dir: data
+  output_dir: output
