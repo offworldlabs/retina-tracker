@@ -196,9 +196,14 @@ def ecef2lla(x, y, z, max_iter=10, tol=1e-6):
 
         # Protect against division by zero at poles
         cos_lat = np.cos(lat)
+        sin_lat = np.sin(lat)
         if abs(cos_lat) < 1e-10:  # Very close to pole
             # Use direct formula for near-pole case
-            alt = abs(z) / abs(np.sin(lat)) - N * (1.0 - WGS84_E_SQ)
+            # Also protect against sin_lat being near zero (shouldn't happen at poles, but be safe)
+            if abs(sin_lat) < 1e-10:
+                alt = 0.0  # Degenerate case, use zero altitude
+            else:
+                alt = abs(z) / abs(sin_lat) - N * (1.0 - WGS84_E_SQ)
         else:
             alt = p / cos_lat - N
 
@@ -214,8 +219,12 @@ def ecef2lla(x, y, z, max_iter=10, tol=1e-6):
     # Final altitude calculation
     N = WGS84_A / np.sqrt(1.0 - WGS84_E_SQ * np.sin(lat) ** 2)
     cos_lat = np.cos(lat)
+    sin_lat = np.sin(lat)
     if abs(cos_lat) < 1e-10:  # Near pole
-        altitude = abs(z) / abs(np.sin(lat)) - N * (1.0 - WGS84_E_SQ)
+        if abs(sin_lat) < 1e-10:
+            altitude = 0.0  # Degenerate case
+        else:
+            altitude = abs(z) / abs(sin_lat) - N * (1.0 - WGS84_E_SQ)
     else:
         altitude = p / cos_lat - N
 

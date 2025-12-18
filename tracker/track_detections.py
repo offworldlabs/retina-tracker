@@ -473,14 +473,22 @@ class Track:
                 vel_east, vel_north, vel_up = geometry.enu_velocity_from_adsb(
                     gs, track, adsb.get('geom_rate', 0)
                 )
-                # Validate computed velocities
-                if not (np.isnan(vel_east) or np.isnan(vel_north) or np.isnan(vel_up)):
+                # Validate computed velocities are not NaN
+                if (np.isnan(vel_east) or np.isnan(vel_north) or np.isnan(vel_up)):
+                    # Computed velocities are NaN, skip velocity initialization
+                    pass
+                else:
                     # Use velocity magnitude as a proxy for delay/Doppler rates
                     vel_horiz = np.sqrt(vel_east**2 + vel_north**2)
-                    # Rough estimate: delay rate ~ velocity / speed of light * 1000 (km/s)
-                    delay_rate_est = vel_horiz / 299792.458  # Very rough approximation
-                    if not np.isnan(delay_rate_est):
-                        self.state[1] = delay_rate_est
+                    # Validate vel_horiz is not NaN or infinite
+                    if np.isnan(vel_horiz) or np.isinf(vel_horiz):
+                        # Skip velocity initialization
+                        pass
+                    else:
+                        # Rough estimate: delay rate ~ velocity / speed of light * 1000 (km/s)
+                        delay_rate_est = vel_horiz / 299792.458  # Very rough approximation
+                        if not (np.isnan(delay_rate_est) or np.isinf(delay_rate_est)):
+                            self.state[1] = delay_rate_est
 
         # Lower covariance for ADS-B initialization
         pos_unc = adsb_config['initial_covariance']['position']
@@ -1108,13 +1116,17 @@ def load_detections(filepath):
 
         # Try parsing as JSONL (one JSON object per line)
         detections = []
-        for line in content.split('\n'):
+        lines = content.split('\n')
+        for line_num, line in enumerate(lines, start=1):
             line = line.strip()
             if line:
                 try:
                     detections.append(json.loads(line))
                 except json.JSONDecodeError as e:
-                    print(f"Warning: Failed to parse line: {e}")
+                    print(f"Warning: Failed to parse line {line_num} in {filepath}: {e}",
+                          file=sys.stderr)
+                    print(f"  Line content: {line[:100]}{'...' if len(line) > 100 else ''}",
+                          file=sys.stderr)
 
         return detections
 
