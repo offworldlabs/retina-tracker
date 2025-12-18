@@ -21,6 +21,18 @@ tracklet:
   max_doppler_residual: 10.0  # Max Doppler residual for linear fit
   max_time_span: 3.0          # Max seconds for 3 detections
 
+# ADS-B assisted tracking (optional)
+adsb:
+  enabled: false              # Enable ADS-B-assisted track initialization
+  priority: true              # Prefer ADS-B tracks in data association
+  reference_location:         # Sensor location for ENU coordinate system
+    latitude: 37.7644         # San Francisco (150 Mississippi)
+    longitude: -122.3954
+    altitude: 23              # meters above WGS84 ellipsoid
+  initial_covariance:
+    position: 100.0           # Position uncertainty (meters)
+    velocity: 5.0             # Velocity uncertainty (m/s)
+
 # Paths (relative to repo root)
 paths:
   data_dir: data

@@ -51,6 +51,15 @@ def load_config(config_path=None):
             'max_delay_residual': 2.0,
             'max_doppler_residual': 10.0,
             'max_time_span': 3.0
+        },
+        'adsb': {
+            'enabled': False,
+            'priority': True,
+            'reference_location': None,
+            'initial_covariance': {
+                'position': 100.0,
+                'velocity': 5.0
+            }
         }
     }
 
@@ -114,7 +123,7 @@ class TrackEventWriter:
             self.output = open(output_file, 'w')
             self._is_stdout = False
 
-    def write_event(self, track_id, timestamp, length, detections):
+    def write_event(self, track_id, timestamp, length, detections, adsb_hex=None, adsb_initialized=False):
         """
         Write a single track update to the output stream.
 
@@ -123,9 +132,13 @@ class TrackEventWriter:
             timestamp: Timestamp in milliseconds
             length: Total number of detections associated with this track
             detections: List of detection dicts with timestamp, delay, doppler, snr
+            adsb_hex: Optional ICAO hex from ADS-B
+            adsb_initialized: Whether track was initialized with ADS-B data
         """
         event = {
             'track_id': track_id,
+            'adsb_hex': adsb_hex,
+            'adsb_initialized': adsb_initialized,
             'timestamp': timestamp,
             'length': length,
             'detections': detections
@@ -317,31 +330,32 @@ class Track:
     _daily_counter = 0
     _last_date = None
 
-    def __init__(self, detection, timestamp, kf, frame=0):
+    def __init__(self, detection, timestamp, kf, frame=0, config=None):
         """
         Initialize track from first detection.
 
         Args:
-            detection: Dict with 'delay', 'doppler', 'snr'
+            detection: Dict with 'delay', 'doppler', 'snr', and optional 'adsb'
             timestamp: Timestamp of detection (ms)
             kf: KalmanFilter instance
             frame: Frame number for this detection
+            config: Configuration dict (optional)
         """
         self.id = None  # ID assigned at promotion only
         self.state_status = TrackState.TENTATIVE
         self.kf = kf
+        self.adsb_hex = None
+        self.adsb_initialized = False
 
-        # Initialize state [delay, delay_rate, doppler, doppler_rate]
-        # Start with zero velocity assumption
-        self.state = np.array([
-            detection['delay'],
-            0.0,
-            detection['doppler'],
-            0.0
-        ])
+        # Check for ADS-B data
+        adsb_config = config.get('adsb', {}) if config else {}
+        if (detection.get('adsb') and
+            adsb_config.get('enabled') and
+            adsb_config.get('reference_location')):
+            self._init_from_adsb(detection, adsb_config)
+        else:
+            self._init_from_delay_doppler(detection)
 
-        # Initialize covariance with high uncertainty
-        self.covariance = np.diag([10.0, 5.0, 20.0, 10.0])
 
         # Track history
         self.history = {
@@ -362,13 +376,93 @@ class Track:
         self.birth_timestamp = timestamp
         self.death_timestamp = timestamp
 
+    def _init_from_adsb(self, detection, adsb_config):
+        """
+        Initialize track using ADS-B position and velocity data.
+
+        Args:
+            detection: Detection dict with 'adsb' field
+            adsb_config: ADS-B configuration dict with reference_location and initial_covariance
+        """
+        from . import geometry
+
+        adsb = detection['adsb']
+        self.adsb_hex = adsb.get('hex')
+        self.adsb_initialized = True
+
+        # Get reference location
+        ref = adsb_config['reference_location']
+
+        # Use measured delay and Doppler for state
+        # (keeping state in delay-Doppler space for consistency with Kalman filter)
+        self.state = np.array([
+            detection['delay'],
+            0.0,
+            detection['doppler'],
+            0.0
+        ])
+
+        # But use ADS-B velocity to estimate better initial velocity
+        if adsb.get('gs') and adsb.get('track'):
+            # This gives us a rough velocity estimate
+            # In reality, delay/Doppler rates depend on geometry, but this is better than zero
+            vel_east, vel_north, vel_up = geometry.enu_velocity_from_adsb(
+                adsb['gs'], adsb['track'], adsb.get('geom_rate', 0)
+            )
+            # Use velocity magnitude as a proxy for delay/Doppler rates
+            vel_horiz = np.sqrt(vel_east**2 + vel_north**2)
+            # Rough estimate: delay rate ~ velocity / speed of light * 1000 (km/s)
+            delay_rate_est = vel_horiz / 299792.458  # Very rough approximation
+            # Initialize with small velocity (better than zero assumption)
+            self.state[1] = delay_rate_est if not np.isnan(delay_rate_est) else 0.0
+
+        # Lower covariance for ADS-B initialization
+        pos_unc = adsb_config['initial_covariance']['position']
+        vel_unc = adsb_config['initial_covariance']['velocity']
+        # Convert position uncertainty to delay units (meters to km)
+        delay_unc = pos_unc / 1000.0
+        # Use configured uncertainties
+        self.covariance = np.diag([delay_unc, vel_unc/1000, 20.0, 10.0])
+
+    def _init_from_delay_doppler(self, detection):
+        """
+        Initialize track from delay-Doppler measurements only (fallback mode).
+
+        Args:
+            detection: Detection dict with 'delay', 'doppler', 'snr'
+        """
+        # Initialize state [delay, delay_rate, doppler, doppler_rate]
+        # Start with zero velocity assumption
+        self.state = np.array([
+            detection['delay'],
+            0.0,
+            detection['doppler'],
+            0.0
+        ])
+
+        # Initialize covariance with high uncertainty
+        self.covariance = np.diag([10.0, 5.0, 20.0, 10.0])
+
     @classmethod
-    def _generate_id(cls, timestamp_ms):
-        """Generate track ID in YYMMDD-XXXXXX format."""
+    def _generate_id(cls, timestamp_ms, adsb_hex=None):
+        """
+        Generate track ID in YYMMDD-XXXXXX format.
+
+        Args:
+            timestamp_ms: Timestamp in milliseconds
+            adsb_hex: Optional ICAO hex identifier from ADS-B
+
+        Returns:
+            Track ID string: YYMMDD-ICAOHEX or YYMMDD-XXXXXX
+        """
         dt = datetime.fromtimestamp(timestamp_ms / 1000.0)
         date_str = dt.strftime('%y%m%d')
 
-        # Reset counter if date changed
+        # Use ICAO hex if available
+        if adsb_hex:
+            return f"{date_str}-{adsb_hex.upper()}"
+
+        # Otherwise use sequential counter
         if cls._last_date != date_str:
             cls._daily_counter = 0
             cls._last_date = date_str
@@ -542,6 +636,8 @@ class Track:
 
         return {
             'id': self.id,
+            'adsb_hex': self.adsb_hex,
+            'adsb_initialized': self.adsb_initialized,
             'state_status': self.state_status.name,
             'n_frames': self.n_frames,
             'n_associated': self.n_associated,
@@ -573,12 +669,13 @@ class Tracker:
     Based on blah2 architecture with enhanced filtering.
     """
 
-    def __init__(self, event_writer=None, detection_window=20):
+    def __init__(self, event_writer=None, detection_window=20, config=None):
         """Initialize tracker.
 
         Args:
             event_writer: Optional TrackEventWriter for streaming JSONL output
             detection_window: Number of detections to include in sliding window (default: 20)
+            config: Configuration dict (optional)
         """
         self.kf = KalmanFilter()
         self.tracks = []
@@ -587,6 +684,7 @@ class Tracker:
         self.detection_window = detection_window
         self.frame_count = 0
         self.event_writer = event_writer
+        self.config = config if config else get_config()
 
     def process_frame(self, detections, timestamp):
         """
@@ -631,7 +729,8 @@ class Tracker:
             # Emit track update (only for promoted tracks with IDs)
             if track.id and self.event_writer:
                 detections_window = track.get_recent_detections(n=self.detection_window)
-                self.event_writer.write_event(track.id, timestamp, track.n_associated, detections_window)
+                self.event_writer.write_event(track.id, timestamp, track.n_associated, detections_window,
+                                              adsb_hex=track.adsb_hex, adsb_initialized=track.adsb_initialized)
 
         # 4. Mark missed tracks
         for i, track in enumerate(self.tracks):
@@ -645,17 +744,18 @@ class Tracker:
         for track in self.tracks:
             promoted = track.promote_if_ready()
             if promoted:
-                # Assign ID at promotion time
-                track.id = Track._generate_id(timestamp)
+                # Assign ID at promotion time (use ICAO hex if available)
+                track.id = Track._generate_id(timestamp, adsb_hex=track.adsb_hex)
                 if self.event_writer:
                     # Include all promotion detections
                     detections_list = track.get_recent_detections(n=track.n_associated)
-                    self.event_writer.write_event(track.id, timestamp, track.n_associated, detections_list)
+                    self.event_writer.write_event(track.id, timestamp, track.n_associated, detections_list,
+                                                  adsb_hex=track.adsb_hex, adsb_initialized=track.adsb_initialized)
 
         # 6. Initiate new tracks from unassociated detections
         for i, det in enumerate(detections):
             if i not in associated_detections:
-                new_track = Track(det, timestamp, self.kf, frame=self.frame_count)
+                new_track = Track(det, timestamp, self.kf, frame=self.frame_count, config=self.config)
                 self.tracks.append(new_track)
                 # No event emitted here - track_init fires at promotion only
 
@@ -714,10 +814,19 @@ class Tracker:
 
                 # Gate: only consider if within threshold
                 if mahal_dist < gate_threshold:
-                    # SNR-weighted cost: prefer high-SNR detections (VERY_LOW config)
+                    # Base cost: Mahalanobis distance
+                    cost = mahal_dist
+
+                    # SNR weighting: prefer high-SNR detections
                     snr = det.get('snr', 10.0)
                     snr_weight = 20.0 / max(snr, 5.0)  # Higher SNR = lower cost
-                    cost_matrix[i, j] = mahal_dist * snr_weight
+                    cost *= snr_weight
+
+                    # ADS-B priority: prefer ADS-B-initialized tracks
+                    if self.config.get('adsb', {}).get('priority') and track.adsb_initialized:
+                        cost *= 0.8  # 20% cost reduction for ADS-B tracks
+
+                    cost_matrix[i, j] = cost
 
         # Solve assignment problem
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
@@ -812,8 +921,8 @@ class Tracker:
                 track.state[1] = delay_velocity    # delay_rate
                 track.state[3] = doppler_velocity  # doppler_rate
 
-                # Assign ID at promotion time
-                track.id = Track._generate_id(timestamp)
+                # Assign ID at promotion time (use ICAO hex if available)
+                track.id = Track._generate_id(timestamp, adsb_hex=track.adsb_hex)
 
                 print(f"Track {track.id} promoted to ACTIVE via tracklet (linear fit: "
                       f"v_delay={delay_velocity:.2f}, v_doppler={doppler_velocity:.2f})",
@@ -823,7 +932,8 @@ class Tracker:
                 if self.event_writer:
                     # Include all promotion detections
                     detections_list = track.get_recent_detections(n=track.n_associated)
-                    self.event_writer.write_event(track.id, timestamp, track.n_associated, detections_list)
+                    self.event_writer.write_event(track.id, timestamp, track.n_associated, detections_list,
+                                                  adsb_hex=track.adsb_hex, adsb_initialized=track.adsb_initialized)
 
     def _merge_tracks(self):
         """
@@ -920,12 +1030,30 @@ class Tracker:
 # ============================================================================
 
 def load_detections(filepath):
-    """Load detection data from JSON file."""
+    """Load detection data from JSON or JSONL file."""
     with open(filepath, 'r') as f:
         content = f.read().strip()
-        detections = json.loads(content)
-        if isinstance(detections, list):
-            return detections
+
+        # Try parsing as single JSON array first
+        try:
+            detections = json.loads(content)
+            if isinstance(detections, list):
+                return detections
+        except json.JSONDecodeError:
+            pass
+
+        # Try parsing as JSONL (one JSON object per line)
+        detections = []
+        for line in content.split('\n'):
+            line = line.strip()
+            if line:
+                try:
+                    detections.append(json.loads(line))
+                except json.JSONDecodeError as e:
+                    print(f"Warning: Failed to parse line: {e}")
+
+        return detections
+
     return []
 
 
@@ -939,8 +1067,8 @@ def process_detections(detections_file, event_writer=None, detection_window=20):
     detection_frames = load_detections(detections_file)
     print(f"Loaded {len(detection_frames)} detection frames", file=output)
 
-    # Initialize tracker
-    tracker = Tracker(event_writer=event_writer, detection_window=detection_window)
+    # Initialize tracker (config loaded automatically via get_config())
+    tracker = Tracker(event_writer=event_writer, detection_window=detection_window, config=get_config())
 
     # Process each frame
     for i, frame in enumerate(detection_frames):
@@ -948,15 +1076,20 @@ def process_detections(detections_file, event_writer=None, detection_window=20):
         delays = frame.get('delay', [])
         dopplers = frame.get('doppler', [])
         snrs = frame.get('snr', [])
+        adsb_list = frame.get('adsb', [])
 
         # Convert to detection list
         detections = []
-        for delay, doppler, snr in zip(delays, dopplers, snrs):
-            detections.append({
+        for idx, (delay, doppler, snr) in enumerate(zip(delays, dopplers, snrs)):
+            detection = {
                 'delay': delay,
                 'doppler': doppler,
                 'snr': snr
-            })
+            }
+            # Add ADS-B data if available for this detection
+            if adsb_list and idx < len(adsb_list) and adsb_list[idx] is not None:
+                detection['adsb'] = adsb_list[idx]
+            detections.append(detection)
 
         # Process frame
         tracker.process_frame(detections, timestamp)
