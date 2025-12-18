@@ -199,9 +199,14 @@ def ecef2lla(x, y, z, max_iter=10, tol=1e-6):
         sin_lat = np.sin(lat)
         if abs(cos_lat) < 1e-10:  # Very close to pole
             # Use direct formula for near-pole case
-            # Also protect against sin_lat being near zero (shouldn't happen at poles, but be safe)
             if abs(sin_lat) < 1e-10:
-                alt = 0.0  # Degenerate case, use zero altitude
+                # Degenerate case: both sin and cos near zero (should not occur mathematically)
+                # This indicates coordinates at or very near Earth's center (x=y=z≈0)
+                # Return altitude of 0 at arbitrary lat/lon since position is undefined
+                import sys
+                print(f"Warning: Degenerate ECEF coordinates ({x:.2f}, {y:.2f}, {z:.2f}) "
+                      f"near Earth center. Returning zero altitude.", file=sys.stderr)
+                alt = 0.0
             else:
                 alt = abs(z) / abs(sin_lat) - N * (1.0 - WGS84_E_SQ)
         else:
@@ -222,7 +227,8 @@ def ecef2lla(x, y, z, max_iter=10, tol=1e-6):
     sin_lat = np.sin(lat)
     if abs(cos_lat) < 1e-10:  # Near pole
         if abs(sin_lat) < 1e-10:
-            altitude = 0.0  # Degenerate case
+            # Degenerate case already warned about in iteration loop
+            altitude = 0.0
         else:
             altitude = abs(z) / abs(sin_lat) - N * (1.0 - WGS84_E_SQ)
     else:

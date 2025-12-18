@@ -299,8 +299,16 @@ class KalmanFilter:
         # Innovation covariance
         S = self.H @ covariance @ self.H.T + R
 
-        # Kalman gain
-        K = covariance @ self.H.T @ np.linalg.inv(S)
+        # Kalman gain - protect against singular matrix
+        try:
+            K = covariance @ self.H.T @ np.linalg.inv(S)
+        except np.linalg.LinAlgError:
+            # Singular matrix - innovation covariance is not invertible
+            # This can happen with numerical issues or degenerate measurements
+            # Return state unchanged (no update)
+            print("Warning: Singular innovation covariance in Kalman update, "
+                  "skipping measurement", file=sys.stderr)
+            return state, covariance
 
         # Update state and covariance
         state_upd = state + K @ innovation
@@ -870,7 +878,15 @@ class Tracker:
         for i, track in enumerate(self.tracks):
             z_pred = track.get_predicted_measurement()
             S = track.get_innovation_covariance()
-            S_inv = np.linalg.inv(S)
+
+            # Compute inverse of innovation covariance - protect against singular matrix
+            try:
+                S_inv = np.linalg.inv(S)
+            except np.linalg.LinAlgError:
+                # Singular innovation covariance - skip this track in association
+                print(f"Warning: Singular innovation covariance for track {track.id}, "
+                      f"skipping association", file=sys.stderr)
+                continue
 
             # Dynamic gating: expand gate for coasting tracks
             gate_threshold = GATE_THRESHOLD()
