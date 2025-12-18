@@ -381,6 +381,51 @@ class Track:
         self.birth_timestamp = timestamp
         self.death_timestamp = timestamp
 
+    @staticmethod
+    def _validate_adsb_data(adsb):
+        """Validate ADS-B data fields are within reasonable ranges.
+
+        Args:
+            adsb: Dictionary containing ADS-B data
+
+        Returns:
+            True if data is valid, False otherwise
+        """
+        if not isinstance(adsb, dict):
+            return False
+
+        # Validate latitude
+        if 'lat' in adsb:
+            lat = adsb['lat']
+            if not isinstance(lat, (int, float)) or np.isnan(lat) or not (-90 <= lat <= 90):
+                return False
+
+        # Validate longitude
+        if 'lon' in adsb:
+            lon = adsb['lon']
+            if not isinstance(lon, (int, float)) or np.isnan(lon) or not (-180 <= lon <= 180):
+                return False
+
+        # Validate altitude (barometric)
+        if 'alt_baro' in adsb:
+            alt = adsb['alt_baro']
+            if not isinstance(alt, (int, float)) or np.isnan(alt) or not (-1000 <= alt <= 60000):
+                return False
+
+        # Validate ground speed
+        if 'gs' in adsb:
+            gs = adsb['gs']
+            if not isinstance(gs, (int, float)) or np.isnan(gs) or not (0 <= gs <= 1000):
+                return False
+
+        # Validate track angle
+        if 'track' in adsb:
+            track = adsb['track']
+            if not isinstance(track, (int, float)) or np.isnan(track) or not (0 <= track < 360):
+                return False
+
+        return True
+
     def _init_from_adsb(self, detection, adsb_config):
         """
         Initialize track using ADS-B position and velocity data.
@@ -392,6 +437,13 @@ class Track:
         from . import geometry
 
         adsb = detection['adsb']
+
+        # Validate ADS-B data before using it
+        if not self._validate_adsb_data(adsb):
+            # Invalid ADS-B data, fall back to radar-only initialization
+            self._init_from_delay_doppler(detection)
+            return
+
         self.adsb_hex = adsb.get('hex')
         self.adsb_initialized = True
 
@@ -408,18 +460,27 @@ class Track:
         ])
 
         # But use ADS-B velocity to estimate better initial velocity
-        if adsb.get('gs') and adsb.get('track'):
-            # This gives us a rough velocity estimate
-            # In reality, delay/Doppler rates depend on geometry, but this is better than zero
-            vel_east, vel_north, vel_up = geometry.enu_velocity_from_adsb(
-                adsb['gs'], adsb['track'], adsb.get('geom_rate', 0)
-            )
-            # Use velocity magnitude as a proxy for delay/Doppler rates
-            vel_horiz = np.sqrt(vel_east**2 + vel_north**2)
-            # Rough estimate: delay rate ~ velocity / speed of light * 1000 (km/s)
-            delay_rate_est = vel_horiz / 299792.458  # Very rough approximation
-            # Initialize with small velocity (better than zero assumption)
-            self.state[1] = delay_rate_est if not np.isnan(delay_rate_est) else 0.0
+        if adsb.get('gs') is not None and adsb.get('track') is not None:
+            # Validate ADS-B velocity data is reasonable
+            gs = adsb['gs']
+            track = adsb['track']
+            if not (0 <= gs <= 1000 and 0 <= track < 360 and not np.isnan(gs) and not np.isnan(track)):
+                # Invalid velocity data, skip velocity initialization
+                pass
+            else:
+                # This gives us a rough velocity estimate
+                # In reality, delay/Doppler rates depend on geometry, but this is better than zero
+                vel_east, vel_north, vel_up = geometry.enu_velocity_from_adsb(
+                    gs, track, adsb.get('geom_rate', 0)
+                )
+                # Validate computed velocities
+                if not (np.isnan(vel_east) or np.isnan(vel_north) or np.isnan(vel_up)):
+                    # Use velocity magnitude as a proxy for delay/Doppler rates
+                    vel_horiz = np.sqrt(vel_east**2 + vel_north**2)
+                    # Rough estimate: delay rate ~ velocity / speed of light * 1000 (km/s)
+                    delay_rate_est = vel_horiz / 299792.458  # Very rough approximation
+                    if not np.isnan(delay_rate_est):
+                        self.state[1] = delay_rate_est
 
         # Lower covariance for ADS-B initialization
         pos_unc = adsb_config['initial_covariance']['position']

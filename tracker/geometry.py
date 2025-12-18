@@ -182,11 +182,25 @@ def ecef2lla(x, y, z, max_iter=10, tol=1e-6):
 
     # Iterative solution for latitude and altitude
     p = np.sqrt(x**2 + y**2)
+
+    # Handle pole cases (p ≈ 0) directly to avoid division by zero
+    if p < 1e-6:  # Within 1mm of pole
+        latitude = 90.0 if z > 0 else -90.0
+        altitude = abs(z) - WGS84_B  # Distance from pole
+        return latitude, longitude, altitude
+
     lat = np.arctan2(z, p * (1.0 - WGS84_E_SQ))
 
     for _ in range(max_iter):
         N = WGS84_A / np.sqrt(1.0 - WGS84_E_SQ * np.sin(lat) ** 2)
-        alt = p / np.cos(lat) - N
+
+        # Protect against division by zero at poles
+        cos_lat = np.cos(lat)
+        if abs(cos_lat) < 1e-10:  # Very close to pole
+            # Use direct formula for near-pole case
+            alt = abs(z) / abs(np.sin(lat)) - N * (1.0 - WGS84_E_SQ)
+        else:
+            alt = p / cos_lat - N
 
         lat_new = np.arctan2(z, p * (1.0 - WGS84_E_SQ * N / (N + alt)))
 
@@ -199,7 +213,11 @@ def ecef2lla(x, y, z, max_iter=10, tol=1e-6):
 
     # Final altitude calculation
     N = WGS84_A / np.sqrt(1.0 - WGS84_E_SQ * np.sin(lat) ** 2)
-    altitude = p / np.cos(lat) - N
+    cos_lat = np.cos(lat)
+    if abs(cos_lat) < 1e-10:  # Near pole
+        altitude = abs(z) / abs(np.sin(lat)) - N * (1.0 - WGS84_E_SQ)
+    else:
+        altitude = p / cos_lat - N
 
     return latitude, longitude, altitude
 
