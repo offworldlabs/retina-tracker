@@ -283,9 +283,14 @@ class KalmanFilter:
         # Adaptive measurement noise based on SNR
         R = self.R.copy()
         if snr is not None:
-            # Lower SNR = higher measurement noise
+            # Convert SNR from dB to linear scale: SNR_linear = 10^(SNR_dB/10)
+            # Scale measurement noise inversely with SNR:
+            # - High SNR (e.g., 20 dB → linear=100) → scale = 1/(100/10) = 0.1 (low noise)
+            # - Low SNR (e.g., 8 dB → linear=6.3) → scale = 1/(6.3/10) = 1.59 (high noise)
+            # max() prevents division by very small values when SNR is extremely low
             snr_linear = 10 ** (snr / 10)
-            R = R * (1.0 / max(snr_linear / 10, 0.1))
+            noise_scale = 1.0 / max(snr_linear / 10, 0.1)
+            R = R * noise_scale
 
         # Innovation (measurement residual)
         z_pred = self.H @ state
@@ -885,12 +890,9 @@ class Tracker:
 
             # Check if measurements span reasonable time (allow gaps, but check total window)
             dt_total = times[-1] - times[0]
-            if dt_total > 3.0:  # 3 associations must be within 3 seconds (allows 1-2 gaps)
+            if dt_total > TRACKLET_MAX_TIME_SPAN():
                 continue
-
-            # Fit linear velocity
-            dt_total = times[-1] - times[0]
-            if dt_total < 0.1:  # Too short time window
+            if dt_total < 0.1:  # Too short time window for reliable velocity estimate
                 continue
 
             delay_velocity = (delays[-1] - delays[0]) / dt_total
@@ -912,8 +914,9 @@ class Tracker:
             max_delay_residual = max(delay_residuals)
             max_doppler_residual = max(doppler_residuals)
 
-            # Thresholds: 2.0 delay units, 10.0 Hz doppler
-            if max_delay_residual < 2.0 and max_doppler_residual < 10.0:
+            # Check against configured thresholds
+            if (max_delay_residual < TRACKLET_MAX_DELAY_RESIDUAL() and
+                max_doppler_residual < TRACKLET_MAX_DOPPLER_RESIDUAL()):
                 # Good linear fit - promote immediately
                 track.state_status = TrackState.ACTIVE
 
