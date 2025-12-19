@@ -123,7 +123,7 @@ class TrackEventWriter:
             self.output = open(output_file, 'w')
             self._is_stdout = False
 
-    def write_event(self, track_id, timestamp, length, detections, adsb_hex=None, adsb_initialized=False):
+    def write_event(self, track_id, timestamp, length, detections, adsb_hex=None, adsb_initialized=False, is_anomalous=False, max_velocity_ms=0.0):
         """
         Write a single track update to the output stream.
 
@@ -134,6 +134,8 @@ class TrackEventWriter:
             detections: List of detection dicts with timestamp, delay, doppler, snr
             adsb_hex: Optional ICAO hex from ADS-B
             adsb_initialized: Whether track was initialized with ADS-B data
+            is_anomalous: Whether track exhibits anomalous velocity
+            max_velocity_ms: Maximum velocity observed in m/s
         """
         event = {
             'track_id': track_id,
@@ -141,7 +143,9 @@ class TrackEventWriter:
             'adsb_initialized': adsb_initialized,
             'timestamp': timestamp,
             'length': length,
-            'detections': detections
+            'detections': detections,
+            'is_anomalous': is_anomalous,
+            'max_velocity_ms': max_velocity_ms
         }
         self.output.write(json.dumps(event) + '\n')
         self.output.flush()  # Important for streaming
@@ -182,6 +186,9 @@ MEASUREMENT_NOISE_DOPPLER = 5.0 # Base measurement noise for doppler
 def TRACKLET_MAX_DELAY_RESIDUAL(): return _get_param('tracklet', 'max_delay_residual', 2.0)
 def TRACKLET_MAX_DOPPLER_RESIDUAL(): return _get_param('tracklet', 'max_doppler_residual', 10.0)
 def TRACKLET_MAX_TIME_SPAN(): return _get_param('tracklet', 'max_time_span', 3.0)
+
+# Anomaly detection constants
+MACH_1_MS = 343.0  # Speed of sound at sea level in m/s
 
 
 # ============================================================================
@@ -389,6 +396,12 @@ class Track:
         self.birth_timestamp = timestamp
         self.death_timestamp = timestamp
 
+        # Anomaly detection
+        self.is_anomalous = False
+        self.max_velocity_ms = 0.0
+        self.anomaly_detections = []
+        self._check_velocity_anomaly(detection, timestamp)
+
     @staticmethod
     def _validate_adsb_data(adsb):
         """Validate ADS-B data fields are within reasonable ranges.
@@ -423,7 +436,7 @@ class Track:
         # Validate ground speed
         if 'gs' in adsb:
             gs = adsb['gs']
-            if not isinstance(gs, (int, float)) or np.isnan(gs) or not (0 <= gs <= 1000):
+            if not isinstance(gs, (int, float)) or np.isnan(gs) or gs < 0:
                 return False
 
         # Validate track angle
@@ -433,6 +446,43 @@ class Track:
                 return False
 
         return True
+
+    def _check_velocity_anomaly(self, detection, timestamp):
+        """Check if detection velocity exceeds Mach 1 threshold.
+
+        Args:
+            detection: Detection dict potentially containing ADS-B data
+            timestamp: Timestamp in milliseconds
+
+        Returns:
+            True if anomalous velocity detected, False otherwise
+        """
+        if not detection.get('adsb'):
+            return False
+
+        adsb = detection['adsb']
+        gs = adsb.get('gs')
+
+        if gs is None or not isinstance(gs, (int, float)) or np.isnan(gs):
+            return False
+
+        from . import geometry
+        velocity_ms = geometry.knots_to_ms(gs)
+
+        if velocity_ms > self.max_velocity_ms:
+            self.max_velocity_ms = velocity_ms
+
+        if velocity_ms > MACH_1_MS:
+            self.is_anomalous = True
+            self.anomaly_detections.append({
+                'timestamp': timestamp,
+                'velocity_ms': velocity_ms,
+                'velocity_knots': gs,
+                'mach': velocity_ms / MACH_1_MS
+            })
+            return True
+
+        return False
 
     def _init_from_adsb(self, detection, adsb_config):
         """
@@ -472,7 +522,7 @@ class Track:
             # Validate ADS-B velocity data is reasonable
             gs = adsb['gs']
             track = adsb['track']
-            if not (0 <= gs <= 1000 and 0 <= track < 360 and not np.isnan(gs) and not np.isnan(track)):
+            if not (gs >= 0 and 0 <= track < 360 and not np.isnan(gs) and not np.isnan(track)):
                 # Invalid velocity data, skip velocity initialization
                 pass
             else:
@@ -592,6 +642,9 @@ class Track:
         # Update quality metrics
         self.total_snr += detection.get('snr', 0)
         self.death_timestamp = timestamp
+
+        # Check for velocity anomalies
+        self._check_velocity_anomaly(detection, timestamp)
 
     def mark_missed(self, timestamp, frame=0):
         """Mark track as not associated this frame."""
@@ -730,6 +783,9 @@ class Track:
             'continuity': continuity,
             'birth_timestamp': self.birth_timestamp,
             'death_timestamp': self.death_timestamp,
+            'is_anomalous': self.is_anomalous,
+            'max_velocity_ms': self.max_velocity_ms,
+            'anomaly_detections': self.anomaly_detections,
             'history': {
                 'timestamps': self.history['timestamps'],
                 'states': [s.tolist() for s in self.history['states']],
@@ -812,7 +868,8 @@ class Tracker:
             if track.id and self.event_writer:
                 detections_window = track.get_recent_detections(n=self.detection_window)
                 self.event_writer.write_event(track.id, timestamp, track.n_associated, detections_window,
-                                              adsb_hex=track.adsb_hex, adsb_initialized=track.adsb_initialized)
+                                              adsb_hex=track.adsb_hex, adsb_initialized=track.adsb_initialized,
+                                              is_anomalous=track.is_anomalous, max_velocity_ms=track.max_velocity_ms)
 
         # 4. Mark missed tracks
         for i, track in enumerate(self.tracks):
@@ -832,7 +889,8 @@ class Tracker:
                     # Include all promotion detections
                     detections_list = track.get_recent_detections(n=track.n_associated)
                     self.event_writer.write_event(track.id, timestamp, track.n_associated, detections_list,
-                                                  adsb_hex=track.adsb_hex, adsb_initialized=track.adsb_initialized)
+                                                  adsb_hex=track.adsb_hex, adsb_initialized=track.adsb_initialized,
+                                                  is_anomalous=track.is_anomalous, max_velocity_ms=track.max_velocity_ms)
 
         # 6. Initiate new tracks from unassociated detections
         for i, det in enumerate(detections):
@@ -1021,7 +1079,8 @@ class Tracker:
                     # Include all promotion detections
                     detections_list = track.get_recent_detections(n=track.n_associated)
                     self.event_writer.write_event(track.id, timestamp, track.n_associated, detections_list,
-                                                  adsb_hex=track.adsb_hex, adsb_initialized=track.adsb_initialized)
+                                                  adsb_hex=track.adsb_hex, adsb_initialized=track.adsb_initialized,
+                                                  is_anomalous=track.is_anomalous, max_velocity_ms=track.max_velocity_ms)
 
     def _merge_tracks(self):
         """
