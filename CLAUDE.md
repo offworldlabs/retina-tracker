@@ -86,6 +86,48 @@ ruff format tracker/ tests/
 
 **This verification process is mandatory, not optional.**
 
+## Visual/Behavioral Verification
+
+**IMPORTANT: Where possible, verify changes have the expected behavior using Claude in Chrome.**
+
+When making changes that affect user-visible functionality or system behavior:
+
+### When to Use Browser Verification
+
+Use Claude in Chrome (browser automation) to verify:
+- **Web UI changes**: Modifications to tar1090 visualization or any web interface
+- **API endpoints**: Test that HTTP endpoints return expected data
+- **Data visualization**: Verify plots, charts, or tracking displays render correctly
+- **Integration points**: Check that components communicate as expected
+- **User workflows**: Validate end-to-end user interactions work properly
+
+### How to Verify
+
+1. **Start the system**: Use docker compose or local development commands
+2. **Use Claude in Chrome**: Navigate to relevant URLs and verify behavior
+3. **Check visual elements**: Ensure UI elements appear and function correctly
+4. **Test interactions**: Click buttons, submit forms, verify responses
+5. **Validate data**: Confirm correct data is displayed in expected format
+
+### Example Verification Scenarios
+
+```bash
+# Scenario: Verify tar1090 web interface displays tracks
+1. Start system: docker compose up -d
+2. Navigate to: http://localhost:8080
+3. Verify: Aircraft tracks appear on map
+4. Verify: Track metadata displays correctly
+5. Verify: Real-time updates work
+
+# Scenario: Verify API returns detection data
+1. Start tracker: python tracker/track_detections.py --config config.yaml
+2. Navigate to API endpoint (if exposed)
+3. Verify: JSON response structure is correct
+4. Verify: Data values are in expected ranges
+```
+
+**Note**: Not all changes require browser verification (e.g., internal algorithms, utility functions). Use judgment to determine when visual/behavioral verification adds value beyond automated tests.
+
 ## Testing
 
 Tests are located in the `tests/` directory:
