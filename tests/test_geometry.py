@@ -5,7 +5,9 @@ Tests for geometry coordinate conversion functions.
 
 import numpy as np
 import sys
-sys.path.insert(0, 'tracker')
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from tracker import geometry
 
 
@@ -119,19 +121,15 @@ def test_enu_velocity_from_adsb():
     track = 45
     vertical_rate = 1000  # ft/min climbing
 
-    vel_east, vel_north, vel_up = geometry.enu_velocity_from_adsb(
-        ground_speed, track, vertical_rate
-    )
+    vel_east, vel_north, vel_up = geometry.enu_velocity_from_adsb(ground_speed, track, vertical_rate)
 
     # Verify velocity magnitude matches ground speed
     horiz_speed = np.sqrt(vel_east**2 + vel_north**2)
     expected_speed = geometry.knots_to_ms(ground_speed)
-    assert abs(horiz_speed - expected_speed) < 0.01, \
-        f"Horizontal speed {horiz_speed} != {expected_speed}"
+    assert abs(horiz_speed - expected_speed) < 0.01, f"Horizontal speed {horiz_speed} != {expected_speed}"
 
     # At 45° heading, east and north components should be equal
-    assert abs(vel_east - vel_north) < 0.01, \
-        f"For 45° heading, east={vel_east} should equal north={vel_north}"
+    assert abs(vel_east - vel_north) < 0.01, f"For 45° heading, east={vel_east} should equal north={vel_north}"
 
     # Verify vertical component is positive (climbing)
     assert vel_up > 0, f"Climbing aircraft should have vel_up > 0, got {vel_up}"
@@ -146,25 +144,25 @@ def test_enu_velocity_cardinal_directions():
 
     # North (0°)
     e, n, u = geometry.enu_velocity_from_adsb(ground_speed, 0)
-    assert abs(e) < 0.01, f"North heading should have ~0 east velocity"
-    assert abs(n - expected_ms) < 0.01, f"North heading should have full north velocity"
+    assert abs(e) < 0.01, "North heading should have ~0 east velocity"
+    assert abs(n - expected_ms) < 0.01, "North heading should have full north velocity"
 
     # East (90°)
     e, n, u = geometry.enu_velocity_from_adsb(ground_speed, 90)
-    assert abs(e - expected_ms) < 0.01, f"East heading should have full east velocity"
-    assert abs(n) < 0.01, f"East heading should have ~0 north velocity"
+    assert abs(e - expected_ms) < 0.01, "East heading should have full east velocity"
+    assert abs(n) < 0.01, "East heading should have ~0 north velocity"
 
     # South (180°)
     e, n, u = geometry.enu_velocity_from_adsb(ground_speed, 180)
-    assert abs(e) < 0.01, f"South heading should have ~0 east velocity"
-    assert abs(n + expected_ms) < 0.01, f"South heading should have negative north velocity"
+    assert abs(e) < 0.01, "South heading should have ~0 east velocity"
+    assert abs(n + expected_ms) < 0.01, "South heading should have negative north velocity"
 
     # West (270°)
     e, n, u = geometry.enu_velocity_from_adsb(ground_speed, 270)
-    assert abs(e + expected_ms) < 0.01, f"West heading should have negative east velocity"
-    assert abs(n) < 0.01, f"West heading should have ~0 north velocity"
+    assert abs(e + expected_ms) < 0.01, "West heading should have negative east velocity"
+    assert abs(n) < 0.01, "West heading should have ~0 north velocity"
 
-    print(f"✓ test_enu_velocity_cardinal_directions passed")
+    print("✓ test_enu_velocity_cardinal_directions passed")
 
 
 def test_norm():
@@ -178,7 +176,7 @@ def test_norm():
     expected = np.sqrt(3)
     assert abs(result - expected) < 0.001, f"Expected {expected}, got {result}"
 
-    print(f"✓ test_norm passed")
+    print("✓ test_norm passed")
 
 
 def test_lla2enu_origin():
@@ -198,27 +196,26 @@ def test_lla2enu_origin():
 def test_bistatic_geometry_consistency():
     """Test that geometry functions match blah2-arm bistatic.js results."""
     # Use same test coordinates as blah2-arm integration test
-    rx = {'latitude': 37.7644, 'longitude': -122.3954, 'altitude': 23}
-    tx = {'latitude': 37.49917, 'longitude': -121.87222, 'altitude': 783}
-    aircraft = {'lat': 37.6, 'lon': -122.1, 'alt_baro': 5000}
+    rx = {"latitude": 37.7644, "longitude": -122.3954, "altitude": 23}
+    tx = {"latitude": 37.49917, "longitude": -121.87222, "altitude": 783}
+    aircraft = {"lat": 37.6, "lon": -122.1, "alt_baro": 5000}
 
     # Convert aircraft to ENU relative to RX
-    alt_m = geometry.ft2m(aircraft['alt_baro'])
+    alt_m = geometry.ft2m(aircraft["alt_baro"])
     east, north, up = geometry.lla2enu(
-        aircraft['lat'], aircraft['lon'], alt_m,
-        rx['latitude'], rx['longitude'], rx['altitude']
+        aircraft["lat"], aircraft["lon"], alt_m, rx["latitude"], rx["longitude"], rx["altitude"]
     )
 
     # Verify aircraft is roughly in expected position
     # Southwest and up from receiver
-    assert east > 0, f"Aircraft should be east"
-    assert north < 0, f"Aircraft should be south"
-    assert up > 0, f"Aircraft should be up"
+    assert east > 0, "Aircraft should be east"
+    assert north < 0, "Aircraft should be south"
+    assert up > 0, "Aircraft should be up"
 
     # Calculate distances using ECEF (same as bistatic.js)
-    ac_x, ac_y, ac_z = geometry.lla2ecef(aircraft['lat'], aircraft['lon'], alt_m)
-    rx_x, rx_y, rx_z = geometry.lla2ecef(rx['latitude'], rx['longitude'], rx['altitude'])
-    tx_x, tx_y, tx_z = geometry.lla2ecef(tx['latitude'], tx['longitude'], tx['altitude'])
+    ac_x, ac_y, ac_z = geometry.lla2ecef(aircraft["lat"], aircraft["lon"], alt_m)
+    rx_x, rx_y, rx_z = geometry.lla2ecef(rx["latitude"], rx["longitude"], rx["altitude"])
+    tx_x, tx_y, tx_z = geometry.lla2ecef(tx["latitude"], tx["longitude"], tx["altitude"])
 
     d_rx_ac = geometry.norm(rx_x - ac_x, rx_y - ac_y, rx_z - ac_z)
     d_tx_ac = geometry.norm(tx_x - ac_x, tx_y - ac_y, tx_z - ac_z)
@@ -247,7 +244,7 @@ def run_tests():
         test_enu_velocity_cardinal_directions,
         test_norm,
         test_lla2enu_origin,
-        test_bistatic_geometry_consistency
+        test_bistatic_geometry_consistency,
     ]
 
     failed = []
@@ -261,7 +258,7 @@ def run_tests():
             print(f"✗ {test.__name__} ERROR: {e}")
             failed.append(test.__name__)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     if failed:
         print(f"FAILED: {len(failed)}/{len(tests)} tests failed")
         for name in failed:
@@ -272,5 +269,5 @@ def run_tests():
         return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     exit(run_tests())
