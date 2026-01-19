@@ -4,7 +4,6 @@ target-version = "py38"
 
 [tool.ruff.lint]
 select = ["E", "F", "W"]
-ignore = ["E501"]
 
 [tool.ruff.format]
 quote-style = "double"

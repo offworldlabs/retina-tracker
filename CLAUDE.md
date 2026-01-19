@@ -25,7 +25,7 @@ pip install -r requirements-dev.txt
 python tracker/track_detections.py --config config.yaml
 
 # Run tests
-for test in tests/test_*.py; do python "$test" || exit 1; done
+pytest tests/ -v
 ```
 
 ### Docker Development
@@ -59,7 +59,7 @@ ruff check tracker/ tests/ --select E,F,W --line-length 120
 ruff format --check tracker/ tests/
 
 # 3. Run all tests
-for test in tests/test_*.py; do python "$test" || exit 1; done
+pytest tests/ -v
 ```
 
 All three commands must pass with zero errors before committing.
