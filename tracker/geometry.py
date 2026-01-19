@@ -204,8 +204,12 @@ def ecef2lla(x, y, z, max_iter=10, tol=1e-6):
                 # This indicates coordinates at or very near Earth's center (x=y=z≈0)
                 # Return altitude of 0 at arbitrary lat/lon since position is undefined
                 import sys
-                print(f"Warning: Degenerate ECEF coordinates ({x:.2f}, {y:.2f}, {z:.2f}) "
-                      f"near Earth center. Returning zero altitude.", file=sys.stderr)
+
+                print(
+                    f"Warning: Degenerate ECEF coordinates ({x:.2f}, {y:.2f}, {z:.2f}) "
+                    f"near Earth center. Returning zero altitude.",
+                    file=sys.stderr,
+                )
                 alt = 0.0
             else:
                 alt = abs(z) / abs(sin_lat) - N * (1.0 - WGS84_E_SQ)
