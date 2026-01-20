@@ -22,6 +22,34 @@ import yaml
 # ============================================================================
 
 
+def load_blah2_config(blah2_config_path):
+    """
+    Load center frequency from blah2 config file.
+
+    Args:
+        blah2_config_path: Path to blah2 config.yml file
+
+    Returns:
+        Center frequency in Hz, or None if not found
+    """
+    try:
+        with open(blah2_config_path, "r") as f:
+            config = yaml.safe_load(f)
+        fc = config.get("capture", {}).get("fc")
+        if fc is not None:
+            print(
+                f"Loaded center frequency {fc / 1e6:.1f} MHz from {blah2_config_path}",
+                file=sys.stderr,
+            )
+        return fc
+    except (OSError, yaml.YAMLError) as e:
+        print(
+            f"Warning: Failed to load blah2 config from {blah2_config_path}: {e}",
+            file=sys.stderr,
+        )
+        return None
+
+
 def load_config(config_path=None):
     """
     Load configuration from YAML file.
@@ -35,6 +63,7 @@ def load_config(config_path=None):
         Dict with configuration values, or defaults if no config found.
     """
     default_config = {
+        "mode": "node",  # 'node' (local tracking) or 'server' (centralized tracking)
         "tracker": {
             "m_threshold": 4,
             "n_window": 6,
@@ -50,6 +79,14 @@ def load_config(config_path=None):
             "priority": True,
             "reference_location": None,
             "initial_covariance": {"position": 100.0, "velocity": 5.0},
+        },
+        "radar": {
+            "blah2_config": None,
+            "center_frequency": 200000000,  # Default 200 MHz
+        },
+        "tcp": {
+            "host": "0.0.0.0",
+            "port": 3012,
         },
     }
 
@@ -223,7 +260,19 @@ def TRACKLET_MAX_TIME_SPAN():
 
 
 # Anomaly detection constants
+SPEED_OF_LIGHT = 299792458.0  # m/s
 MACH_1_MS = 343.0  # Speed of sound at sea level in m/s
+KNOTS_TO_MS = 0.514444  # Conversion factor
+
+
+def get_mach1_doppler_threshold():
+    """
+    Calculate Doppler threshold for Mach 1 based on center frequency.
+
+    Uses worst-case bistatic geometry (TX/RX collocated): f_d = 2 * v * fc / c
+    """
+    fc = _get_param("radar", "center_frequency", 200000000)
+    return 2 * MACH_1_MS * fc / SPEED_OF_LIGHT
 
 
 # ============================================================================
@@ -428,8 +477,7 @@ class Track:
         # Anomaly detection
         self.is_anomalous = False
         self.max_velocity_ms = 0.0
-        self.anomaly_detections = []
-        self._check_velocity_anomaly(detection, timestamp)
+        self._check_doppler_anomaly(detection)
 
     @staticmethod
     def _validate_adsb_data(adsb):
@@ -476,45 +524,44 @@ class Track:
 
         return True
 
-    def _check_velocity_anomaly(self, detection, timestamp):
-        """Check if detection velocity exceeds Mach 1 threshold.
+    def _check_doppler_anomaly(self, detection):
+        """Check if Doppler implies supersonic velocity without ADS-B confirmation.
+
+        Flags as anomalous if:
+        - Doppler shift implies velocity >= Mach 1, AND
+        - No ADS-B data confirms the object is legitimately supersonic
 
         Args:
-            detection: Detection dict potentially containing ADS-B data
-            timestamp: Timestamp in milliseconds
+            detection: Detection dict with 'doppler' and optional 'adsb'
 
         Returns:
-            True if anomalous velocity detected, False otherwise
+            True if anomalous (supersonic without confirmation), False otherwise
         """
-        if not detection.get("adsb"):
-            return False
+        doppler = abs(detection["doppler"])
+        threshold = get_mach1_doppler_threshold()
 
-        adsb = detection["adsb"]
-        gs = adsb.get("gs")
+        if doppler < threshold:
+            return False  # Not supersonic, not anomalous
 
-        if gs is None or not isinstance(gs, (int, float)) or np.isnan(gs):
-            return False
-
-        from . import geometry
-
-        velocity_ms = geometry.knots_to_ms(gs)
+        # Estimate velocity from Doppler (worst-case geometry)
+        fc = _get_param("radar", "center_frequency", 200000000)
+        velocity_ms = doppler * SPEED_OF_LIGHT / (2 * fc)
 
         if velocity_ms > self.max_velocity_ms:
             self.max_velocity_ms = velocity_ms
 
-        if velocity_ms > MACH_1_MS:
-            self.is_anomalous = True
-            self.anomaly_detections.append(
-                {
-                    "timestamp": timestamp,
-                    "velocity_ms": velocity_ms,
-                    "velocity_knots": gs,
-                    "mach": velocity_ms / MACH_1_MS,
-                }
-            )
-            return True
+        # Check if ADS-B confirms supersonic velocity
+        if detection.get("adsb"):
+            adsb_gs = detection["adsb"].get("gs")
+            if adsb_gs is not None and isinstance(adsb_gs, (int, float)) and not np.isnan(adsb_gs):
+                adsb_velocity_ms = adsb_gs * KNOTS_TO_MS
+                if adsb_velocity_ms >= MACH_1_MS:
+                    # Legitimate supersonic aircraft - not anomalous
+                    return False
 
-        return False
+        # Supersonic Doppler without ADS-B confirmation = anomalous
+        self.is_anomalous = True
+        return True
 
     def _init_from_adsb(self, detection, adsb_config):
         """
@@ -658,8 +705,8 @@ class Track:
         self.total_snr += detection.get("snr", 0)
         self.death_timestamp = timestamp
 
-        # Check for velocity anomalies
-        self._check_velocity_anomaly(detection, timestamp)
+        # Check for Doppler anomalies
+        self._check_doppler_anomaly(detection)
 
     def mark_missed(self, timestamp, frame=0):
         """Mark track as not associated this frame."""
@@ -802,7 +849,6 @@ class Track:
             "death_timestamp": self.death_timestamp,
             "is_anomalous": self.is_anomalous,
             "max_velocity_ms": self.max_velocity_ms,
-            "anomaly_detections": self.anomaly_detections,
             "history": {
                 "timestamps": self.history["timestamps"],
                 "states": [s.tolist() for s in self.history["states"]],
@@ -1187,6 +1233,10 @@ class Tracker:
         track_a.state = track_b.state
         track_a.covariance = track_b.covariance
 
+    def get_tracks(self):
+        """Get current tracks (alias for get_all_tracks, primary API method)."""
+        return self.tracks
+
     def get_active_tracks(self):
         """Get all ACTIVE tracks."""
         return [t for t in self.tracks if t.state_status == TrackState.ACTIVE]
@@ -1300,6 +1350,94 @@ def save_tracks(tracker, output_file):
     print(f"Saved {data['n_tracks']} tracks to {output_file}", file=sys.stderr)
 
 
+def process_streaming_frame(tracker, frame):
+    """
+    Convert blah2 streaming frame format to detections and process.
+
+    Args:
+        tracker: Tracker instance
+        frame: Dict with 'timestamp', 'delay', 'doppler', 'snr', 'adsb' arrays
+    """
+    timestamp = frame["timestamp"]
+    delays = frame.get("delay", [])
+    dopplers = frame.get("doppler", [])
+    snrs = frame.get("snr", [])
+    adsb_list = frame.get("adsb", [])
+
+    detections = []
+    for idx, (delay, doppler, snr) in enumerate(zip(delays, dopplers, snrs)):
+        detection = {
+            "delay": delay,
+            "doppler": doppler,
+            "snr": snr,
+        }
+        if adsb_list and idx < len(adsb_list) and adsb_list[idx] is not None:
+            detection["adsb"] = adsb_list[idx]
+        detections.append(detection)
+
+    tracker.process_frame(detections, timestamp)
+
+
+def run_tcp_server(host="0.0.0.0", port=3012, event_writer=None, detection_window=20, config=None):
+    """
+    Run tracker as TCP server receiving detection frames from blah2.
+
+    blah2 connects as client and sends newline-delimited JSON frames at ~2 Hz.
+    Track state persists across client reconnections.
+
+    Args:
+        host: Bind address (default: 0.0.0.0)
+        port: TCP port to listen on (default: 3012)
+        event_writer: TrackEventWriter for streaming output
+        detection_window: Number of detections in sliding window
+        config: Configuration dict
+    """
+    import socket
+
+    tracker = Tracker(
+        event_writer=event_writer,
+        detection_window=detection_window,
+        config=config or get_config(),
+    )
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((host, port))
+    server.listen(1)
+
+    print(f"Tracker listening on {host}:{port}", file=sys.stderr)
+
+    while True:
+        conn, addr = server.accept()
+        print(f"blah2 connected from {addr}", file=sys.stderr)
+
+        buffer = ""
+        while True:
+            try:
+                data = conn.recv(4096).decode("utf-8")
+                if not data:
+                    break
+
+                buffer += data
+
+                # Process complete JSON lines
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    if line.strip():
+                        frame = json.loads(line)
+                        process_streaming_frame(tracker, frame)
+
+            except (ConnectionResetError, BrokenPipeError):
+                print("blah2 disconnected", file=sys.stderr)
+                break
+            except json.JSONDecodeError as e:
+                print(f"JSON parse error: {e}", file=sys.stderr)
+                continue
+
+        conn.close()
+        print("Waiting for blah2 reconnection...", file=sys.stderr)
+
+
 def visualize_tracks(
     tracker, detections_file, output_image, tracks_only=False, min_associations=0, length_bucket="all"
 ):
@@ -1394,7 +1532,7 @@ def visualize_tracks(
 
 def main():
     parser = argparse.ArgumentParser(description="Track bistatic radar detections")
-    parser.add_argument("file", help="Path to .detection file")
+    parser.add_argument("file", nargs="?", help="Path to .detection file (omit for --tcp mode)")
     parser.add_argument("-o", "--output", default="tracks.json", help="Output JSON file for tracks")
     parser.add_argument("-v", "--visualize", help="Output image file for visualization")
     parser.add_argument("--tracks-only", action="store_true", help="Visualize tracks only (no detection background)")
@@ -1415,38 +1553,72 @@ def main():
         help="Number of detections to include in sliding window (default: 20)",
     )
     parser.add_argument("-c", "--config", type=str, help="Path to configuration file (default: config.yaml)")
+    parser.add_argument(
+        "--blah2-config", type=str, help="Path to blah2 config.yml to read center frequency (fc)"
+    )
+
+    # TCP server mode arguments
+    parser.add_argument("--tcp", action="store_true", help="Run as TCP server for streaming input from blah2")
+    parser.add_argument("--tcp-host", default="0.0.0.0", help="TCP bind address (default: 0.0.0.0)")
+    parser.add_argument("--tcp-port", type=int, default=3012, help="TCP port to listen on (default: 3012)")
 
     args = parser.parse_args()
+
+    # Validate: need either file OR --tcp
+    if not args.file and not args.tcp:
+        parser.error("Either provide a detection file or use --tcp for streaming mode")
+    if args.file and args.tcp:
+        parser.error("Cannot use both file input and --tcp mode")
 
     # Load configuration
     if args.config:
         set_config(load_config(args.config))
 
-    # Setup event writer if streaming output requested
+    # Load center frequency from blah2 config if provided
+    if args.blah2_config:
+        fc = load_blah2_config(args.blah2_config)
+        if fc is not None:
+            config = get_config()
+            config["radar"]["center_frequency"] = fc
+
+    # Setup event writer
     event_writer = None
     if args.stream_output:
         event_writer = TrackEventWriter(args.stream_output)
+    elif args.tcp:
+        # Default to stdout for TCP mode
+        event_writer = TrackEventWriter("-")
 
-    # Process detections
-    tracker = process_detections(args.file, event_writer=event_writer, detection_window=args.detection_window)
-
-    # Close event writer
-    if event_writer:
-        event_writer.close()
-
-    # Save tracks
-    save_tracks(tracker, args.output)
-
-    # Visualize if requested
-    if args.visualize:
-        visualize_tracks(
-            tracker,
-            args.file,
-            args.visualize,
-            tracks_only=args.tracks_only,
-            min_associations=args.min_assoc,
-            length_bucket=args.length_bucket,
+    if args.tcp:
+        # TCP server mode - run indefinitely
+        run_tcp_server(
+            host=args.tcp_host,
+            port=args.tcp_port,
+            event_writer=event_writer,
+            detection_window=args.detection_window,
+            config=get_config(),
         )
+    else:
+        # File processing mode (existing behavior)
+        tracker = process_detections(args.file, event_writer=event_writer, detection_window=args.detection_window)
+
+        # Close event writer
+        if event_writer:
+            event_writer.close()
+
+        # Save tracks
+        save_tracks(tracker, args.output)
+
+        # Visualize if requested
+        if args.visualize:
+            visualize_tracks(
+                tracker,
+                args.file,
+                args.visualize,
+                tracks_only=args.tracks_only,
+                min_associations=args.min_assoc,
+                length_bucket=args.length_bucket,
+            )
 
 
 if __name__ == "__main__":
