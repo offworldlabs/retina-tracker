@@ -638,7 +638,7 @@ class Track:
         velocity_ms = geometry.knots_to_ms(gs)
 
         if self.last_velocity_ms is not None and len(self.history["timestamps"]) > 1:
-            dt = (timestamp - self.history["timestamps"][-1]) / 1000.0
+            dt = (timestamp - self.history["timestamps"][-2]) / 1000.0
 
             if dt > 0 and dt < 10.0:
                 dv = abs(velocity_ms - self.last_velocity_ms)
@@ -682,7 +682,7 @@ class Track:
             return False
 
         if self.last_heading_deg is not None and len(self.history["timestamps"]) > 1:
-            dt = (timestamp - self.history["timestamps"][-1]) / 1000.0
+            dt = (timestamp - self.history["timestamps"][-2]) / 1000.0
 
             if dt > 0 and dt < 10.0:
                 dheading = abs(track - self.last_heading_deg)
