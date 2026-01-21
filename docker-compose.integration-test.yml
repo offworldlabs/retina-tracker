@@ -1,0 +1,121 @@
+# Docker Compose for Integration Testing
+# Tests: synthetic-adsb -> tracker-host -> retina-tracker pipeline
+#
+# Usage:
+#   docker compose -f docker-compose.integration-test.yml up --build
+#   docker compose -f docker-compose.integration-test.yml logs -f tracker-host-test
+#   docker compose -f docker-compose.integration-test.yml down
+#
+# Verification:
+#   Look for "is_anomalous.*true" in tracker-host-test logs to confirm anomaly detection
+
+services:
+  # Synthetic ADS-B data generator with anomalies enabled
+  synthetic-adsb-test:
+    build:
+      context: ./synthetic-adsb
+      dockerfile: Dockerfile
+    container_name: synthetic-adsb-test
+    environment:
+      - TX_LAT=-34.9810
+      - TX_LON=138.7081
+      - TX_ALT=750
+      - FC_MHZ=204.64
+      - RADIUS_DEG=0.05
+      - ANGULAR_SPEED=0.01
+      - ALT_BARO_FT=30000
+      - ICAO_HEX=AEF001
+      - HOST=0.0.0.0
+      - PORT=5001
+      - RADARS=[{"id":"rx1","lat":-34.9192,"lon":138.6027,"alt":110,"port":49158},{"id":"rx2","lat":-34.9315,"lon":138.6967,"alt":408,"port":49159},{"id":"rx3","lat":-34.8414,"lon":138.7237,"alt":230,"port":49160}]
+      - ENABLE_ANOMALIES=true
+      - NORMAL_AIRCRAFT_COUNT=2
+      - ANOMALOUS_AIRCRAFT_COUNT=3
+      - ANOMALY_ADSB_PROBABILITY=0.1
+      - SUPERSONIC_MACH_MIN=2.0
+      - SUPERSONIC_MACH_MAX=5.0
+      - SUPERSONIC_ALTITUDE_FT=50000
+    # Internal ports only - no host binding to avoid conflicts
+    expose:
+      - "5001"
+      - "49158"
+      - "49159"
+      - "49160"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5001/data/aircraft.json')\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    networks:
+      - integration-test-net
+
+  # Retina tracker running in TCP server mode
+  retina-tracker-test:
+    build:
+      context: ./retina-tracker
+      dockerfile: Dockerfile
+    container_name: retina-tracker-test
+    command: >
+      python -m tracker.track_detections
+      --tcp
+      --tcp-host 0.0.0.0
+      --tcp-port 30100
+      -s -
+    expose:
+      - "30100"
+    depends_on:
+      synthetic-adsb-test:
+        condition: service_healthy
+    networks:
+      - integration-test-net
+
+  # Tracker host that bridges synthetic-adsb to retina-tracker
+  tracker-host-test:
+    build:
+      context: ./tracker-host
+      dockerfile: Dockerfile
+    container_name: tracker-host-test
+    command: ["python", "-m", "tracker_host", "-c", "/app/config.docker.yaml", "-v"]
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./tracker-host/config.docker.yaml:/app/config.docker.yaml:ro
+      - ./test_output:/app/output
+    depends_on:
+      synthetic-adsb-test:
+        condition: service_healthy
+      retina-tracker-test:
+        condition: service_started
+    networks:
+      - integration-test-net
+
+  # Integration test runner - runs pytest and exits
+  integration-test-runner:
+    build:
+      context: ./retina-tracker
+      dockerfile: Dockerfile
+    container_name: integration-test-runner
+    working_dir: /app
+    command: >
+      sh -c "
+        echo 'Waiting for services to stabilize...' &&
+        sleep 15 &&
+        echo 'Running integration tests...' &&
+        pip install pytest &&
+        python -m pytest tests/test_integration_synthetic.py -v --tb=short &&
+        echo 'Integration tests completed!'
+      "
+    volumes:
+      - ./synthetic-adsb:/synthetic-adsb:ro
+    environment:
+      - PYTHONPATH=/app:/synthetic-adsb
+    depends_on:
+      synthetic-adsb-test:
+        condition: service_healthy
+    networks:
+      - integration-test-net
+
+networks:
+  integration-test-net:
+    driver: bridge
