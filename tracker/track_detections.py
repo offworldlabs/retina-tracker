@@ -16,6 +16,11 @@ import argparse
 import matplotlib.pyplot as plt
 import yaml
 
+try:
+    from . import geometry
+except ImportError:
+    import geometry
+
 
 # ============================================================================
 # CONFIGURATION LOADING
@@ -224,6 +229,8 @@ def TRACKLET_MAX_TIME_SPAN():
 
 # Anomaly detection constants
 MACH_1_MS = 343.0  # Speed of sound at sea level in m/s
+MAX_NORMAL_ACCEL_MS2 = 15.0  # Max normal aircraft acceleration (m/s^2)
+MAX_DIRECTION_CHANGE_DEG_PER_SEC = 30.0  # Max normal turn rate (deg/s)
 
 
 # ============================================================================
@@ -429,6 +436,9 @@ class Track:
         self.is_anomalous = False
         self.max_velocity_ms = 0.0
         self.anomaly_detections = []
+        self.anomaly_types = set()
+        self.last_velocity_ms = None
+        self.last_heading_deg = None
         self._check_velocity_anomaly(detection, timestamp)
 
     @staticmethod
@@ -495,8 +505,6 @@ class Track:
         if gs is None or not isinstance(gs, (int, float)) or np.isnan(gs):
             return False
 
-        from . import geometry
-
         velocity_ms = geometry.knots_to_ms(gs)
 
         if velocity_ms > self.max_velocity_ms:
@@ -504,9 +512,11 @@ class Track:
 
         if velocity_ms > MACH_1_MS:
             self.is_anomalous = True
+            self.anomaly_types.add("supersonic")
             self.anomaly_detections.append(
                 {
                     "timestamp": timestamp,
+                    "type": "supersonic",
                     "velocity_ms": velocity_ms,
                     "velocity_knots": gs,
                     "mach": velocity_ms / MACH_1_MS,
@@ -514,6 +524,99 @@ class Track:
             )
             return True
 
+        return False
+
+    def _check_acceleration_anomaly(self, detection, timestamp):
+        """Check if detection shows impossible acceleration.
+
+        Args:
+            detection: Detection dict potentially containing ADS-B data
+            timestamp: Timestamp in milliseconds
+
+        Returns:
+            True if anomalous acceleration detected, False otherwise
+        """
+        if not detection.get("adsb"):
+            return False
+
+        adsb = detection["adsb"]
+        gs = adsb.get("gs")
+
+        if gs is None or not isinstance(gs, (int, float)) or np.isnan(gs):
+            return False
+
+        velocity_ms = geometry.knots_to_ms(gs)
+
+        if self.last_velocity_ms is not None and len(self.history["timestamps"]) > 1:
+            dt = (timestamp - self.history["timestamps"][-1]) / 1000.0
+
+            if dt > 0 and dt < 10.0:
+                dv = abs(velocity_ms - self.last_velocity_ms)
+                acceleration = dv / dt
+
+                if acceleration > MAX_NORMAL_ACCEL_MS2:
+                    self.is_anomalous = True
+                    self.anomaly_types.add("instant_acceleration")
+                    self.anomaly_detections.append(
+                        {
+                            "timestamp": timestamp,
+                            "type": "instant_acceleration",
+                            "acceleration_ms2": acceleration,
+                            "velocity_change_ms": dv,
+                            "time_delta_sec": dt,
+                        }
+                    )
+                    self.last_velocity_ms = velocity_ms
+                    return True
+
+        self.last_velocity_ms = velocity_ms
+        return False
+
+    def _check_direction_change_anomaly(self, detection, timestamp):
+        """Check if detection shows impossible direction change.
+
+        Args:
+            detection: Detection dict potentially containing ADS-B data
+            timestamp: Timestamp in milliseconds
+
+        Returns:
+            True if anomalous direction change detected, False otherwise
+        """
+        if not detection.get("adsb"):
+            return False
+
+        adsb = detection["adsb"]
+        track = adsb.get("track")
+
+        if track is None or not isinstance(track, (int, float)) or np.isnan(track):
+            return False
+
+        if self.last_heading_deg is not None and len(self.history["timestamps"]) > 1:
+            dt = (timestamp - self.history["timestamps"][-1]) / 1000.0
+
+            if dt > 0 and dt < 10.0:
+                dheading = abs(track - self.last_heading_deg)
+                if dheading > 180:
+                    dheading = 360 - dheading
+
+                turn_rate = dheading / dt
+
+                if turn_rate > MAX_DIRECTION_CHANGE_DEG_PER_SEC:
+                    self.is_anomalous = True
+                    self.anomaly_types.add("instant_direction_change")
+                    self.anomaly_detections.append(
+                        {
+                            "timestamp": timestamp,
+                            "type": "instant_direction_change",
+                            "turn_rate_deg_per_sec": turn_rate,
+                            "heading_change_deg": dheading,
+                            "time_delta_sec": dt,
+                        }
+                    )
+                    self.last_heading_deg = track
+                    return True
+
+        self.last_heading_deg = track
         return False
 
     def _init_from_adsb(self, detection, adsb_config):
@@ -524,8 +627,6 @@ class Track:
             detection: Detection dict with 'adsb' field
             adsb_config: ADS-B configuration dict with reference_location and initial_covariance
         """
-        from . import geometry
-
         adsb = detection["adsb"]
 
         # Validate ADS-B data before using it
@@ -658,8 +759,10 @@ class Track:
         self.total_snr += detection.get("snr", 0)
         self.death_timestamp = timestamp
 
-        # Check for velocity anomalies
+        # Check for anomalies
         self._check_velocity_anomaly(detection, timestamp)
+        self._check_acceleration_anomaly(detection, timestamp)
+        self._check_direction_change_anomaly(detection, timestamp)
 
     def mark_missed(self, timestamp, frame=0):
         """Mark track as not associated this frame."""
@@ -802,6 +905,7 @@ class Track:
             "death_timestamp": self.death_timestamp,
             "is_anomalous": self.is_anomalous,
             "max_velocity_ms": self.max_velocity_ms,
+            "anomaly_types": list(self.anomaly_types),
             "anomaly_detections": self.anomaly_detections,
             "history": {
                 "timestamps": self.history["timestamps"],

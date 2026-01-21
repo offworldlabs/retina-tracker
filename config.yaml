@@ -23,7 +23,7 @@ tracklet:
 
 # ADS-B assisted tracking (optional)
 adsb:
-  enabled: false              # Enable ADS-B-assisted track initialization
+  enabled: true               # Enable ADS-B-assisted track initialization
   priority: true              # Prefer ADS-B tracks in data association
   reference_location:         # Sensor location for ENU coordinate system
     latitude: 37.7644         # San Francisco (150 Mississippi)
