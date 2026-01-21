@@ -527,6 +527,8 @@ class Track:
     def _check_doppler_anomaly(self, detection):
         """Check if Doppler implies supersonic velocity without ADS-B confirmation.
 
+        Always updates max_velocity_ms with velocity estimated from Doppler.
+
         Flags as anomalous if:
         - Doppler shift implies velocity >= Mach 1, AND
         - No ADS-B data confirms the object is legitimately supersonic
@@ -540,15 +542,16 @@ class Track:
         doppler = abs(detection["doppler"])
         threshold = get_mach1_doppler_threshold()
 
-        if doppler < threshold:
-            return False  # Not supersonic, not anomalous
-
         # Estimate velocity from Doppler (worst-case geometry)
         fc = _get_param("radar", "center_frequency", 200000000)
         velocity_ms = doppler * SPEED_OF_LIGHT / (2 * fc)
 
+        # Always track maximum observed velocity
         if velocity_ms > self.max_velocity_ms:
             self.max_velocity_ms = velocity_ms
+
+        if doppler < threshold:
+            return False  # Not supersonic, not anomalous
 
         # Check if ADS-B confirms supersonic velocity
         if detection.get("adsb"):

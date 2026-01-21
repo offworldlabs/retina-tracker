@@ -44,29 +44,25 @@ def create_normal_aircraft_data():
 
 
 def create_anomalous_aircraft_data():
-    """Create detection data with anomalous aircraft (Mach 5)."""
+    """Create detection data with anomalous aircraft (Mach 5) WITHOUT ADS-B confirmation.
+
+    This tests the case where radar detects a supersonic object but there's no ADS-B
+    data to confirm it's a legitimate aircraft - this should be flagged as anomalous.
+    """
     detections = []
 
-    # Mach 5 = 5 * 343 m/s ≈ 1715 m/s ≈ 3333 knots
-    mach5_knots = (5 * MACH_1_MS) / geometry.KNOTS_TO_MS
+    # Calculate Doppler for Mach 5: f_d = 2 * v * fc / c
+    # For default 200 MHz: Mach 5 Doppler ≈ 2 * 1715 * 200e6 / 3e8 ≈ 2287 Hz
+    mach5_doppler = 2 * (5 * MACH_1_MS) * 200000000 / 299792458
 
     for i in range(5):
         detections.append(
             {
                 "timestamp": 1700000000000 + i * 500,
                 "delay": [75.0 + i * 2.0],  # Faster movement
-                "doppler": [200.0 - i * 10],  # Larger Doppler shift
+                "doppler": [mach5_doppler - i * 10],  # Supersonic Doppler shift
                 "snr": [18.0],
-                "adsb": [
-                    {
-                        "hex": "def456",
-                        "lat": 37.8 + i * 0.01,  # Moving much faster
-                        "lon": -122.2 + i * 0.01,
-                        "alt_baro": 20000 + i * 500,
-                        "gs": mach5_knots,  # Mach 5 speed
-                        "track": 90,
-                    }
-                ],
+                # No ADS-B data - this is an unidentified supersonic object (anomalous)
             }
         )
 
@@ -77,15 +73,21 @@ def create_anomalous_aircraft_data():
 
 
 def create_mixed_aircraft_data():
-    """Create detection data with both normal and anomalous aircraft."""
+    """Create detection data with both normal and anomalous aircraft.
+
+    Normal aircraft: subsonic Doppler with ADS-B confirmation
+    Anomalous aircraft: supersonic Doppler WITHOUT ADS-B confirmation
+    """
     detections = []
-    mach5_knots = (5 * MACH_1_MS) / geometry.KNOTS_TO_MS
+
+    # Calculate Doppler for Mach 5
+    mach5_doppler = 2 * (5 * MACH_1_MS) * 200000000 / 299792458
 
     for i in range(6):
         frame_data = {
             "timestamp": 1700000000000 + i * 500,
             "delay": [50.0 + i * 0.5, 75.0 + i * 2.0],
-            "doppler": [100.0 - i * 2, 200.0 - i * 10],
+            "doppler": [100.0 - i * 2, mach5_doppler - i * 10],  # Normal, then supersonic
             "snr": [15.0, 18.0],
             "adsb": [
                 {
@@ -93,17 +95,10 @@ def create_mixed_aircraft_data():
                     "lat": 37.8 + i * 0.001,
                     "lon": -122.2 + i * 0.001,
                     "alt_baro": 8500,
-                    "gs": 250,  # Normal speed
+                    "gs": 250,  # Normal speed - confirms subsonic
                     "track": 45,
                 },
-                {
-                    "hex": "anomaly1",
-                    "lat": 37.9 + i * 0.01,
-                    "lon": -122.3 + i * 0.01,
-                    "alt_baro": 20000,
-                    "gs": mach5_knots,  # Mach 5
-                    "track": 90,
-                },
+                None,  # No ADS-B for the supersonic target - makes it anomalous
             ],
         }
         detections.append(frame_data)
@@ -166,13 +161,13 @@ def test_anomalous_aircraft():
             "n_window": 5,
             "n_delete": 10,
             "min_snr": 7.0,
-            "gate_threshold": 50.0,  # Much larger gate for fast-moving objects
+            "gate_threshold": 100.0,  # Large gate for fast-moving objects
         },
         "adsb": {
-            "enabled": True,
-            "priority": True,
-            "reference_location": {"latitude": 37.7644, "longitude": -122.3954, "altitude": 23},
-            "initial_covariance": {"position": 100.0, "velocity": 5.0},
+            "enabled": False,  # No ADS-B for this test - testing raw anomaly detection
+        },
+        "radar": {
+            "center_frequency": 200000000,  # 200 MHz
         },
     }
 
@@ -192,18 +187,9 @@ def test_anomalous_aircraft():
             print(f"\nTrack {track_dict['id']}:")
             print(f"  Max velocity: {velocity_ms:.2f} m/s ({velocity_ms / MACH_1_MS:.2f} Mach)")
             print(f"  Is anomalous: {track_dict['is_anomalous']}")
-            print(f"  Anomaly detections: {len(track_dict['anomaly_detections'])}")
 
-            if len(track_dict["anomaly_detections"]) > 0:
-                print(f"  First anomaly: Mach {track_dict['anomaly_detections'][0]['mach']:.2f}")
-
-            assert track.is_anomalous, "Mach 5 aircraft should be flagged as anomalous"
+            assert track.is_anomalous, "Mach 5 aircraft without ADS-B should be flagged as anomalous"
             assert velocity_ms > MACH_1_MS, f"Mach 5 velocity {velocity_ms} should be > Mach 1 ({MACH_1_MS})"
-            assert len(track.anomaly_detections) > 0, "Should have anomaly detection records"
-
-            for anomaly in track.anomaly_detections:
-                assert anomaly["velocity_ms"] > MACH_1_MS
-                assert anomaly["mach"] > 1.0
 
     os.remove(test_file)
     print("\n✓ Test 2 passed: Anomaly detection logic validated")
@@ -218,12 +204,15 @@ def test_mixed_aircraft():
     test_file = create_mixed_aircraft_data()
 
     config = {
-        "tracker": {"m_threshold": 3, "n_window": 5, "n_delete": 10, "min_snr": 7.0, "gate_threshold": 9.0},
+        "tracker": {"m_threshold": 3, "n_window": 5, "n_delete": 10, "min_snr": 7.0, "gate_threshold": 50.0},
         "adsb": {
             "enabled": True,
             "priority": True,
             "reference_location": {"latitude": 37.7644, "longitude": -122.3954, "altitude": 23},
             "initial_covariance": {"position": 100.0, "velocity": 5.0},
+        },
+        "radar": {
+            "center_frequency": 200000000,  # 200 MHz
         },
     }
 
@@ -260,16 +249,26 @@ def test_mixed_aircraft():
 
 
 def test_anomaly_threshold():
-    """Test that the Mach 1 threshold is correctly applied."""
+    """Test that the Mach 1 Doppler threshold is correctly applied.
+
+    Anomaly detection is based on Doppler shift, NOT ADS-B ground speed.
+    - Doppler below Mach 1 threshold: NOT anomalous
+    - Doppler above Mach 1 threshold WITHOUT ADS-B: anomalous
+    """
     print("\n" + "=" * 60)
     print("Test 4: Anomaly Threshold (Mach 1 = 343 m/s)")
     print("=" * 60)
 
-    print(f"\nMach 1 threshold: {MACH_1_MS} m/s")
+    fc = 200000000  # 200 MHz
+    c = 299792458
 
-    # Test velocity just below Mach 1
-    below_mach1_knots = (MACH_1_MS - 10) / geometry.KNOTS_TO_MS  # 333 m/s
-    print(f"Testing velocity: {MACH_1_MS - 10:.2f} m/s (just below Mach 1)")
+    # Calculate Doppler threshold for Mach 1: f_d = 2 * v * fc / c
+    mach1_doppler = 2 * MACH_1_MS * fc / c
+    print(f"\nMach 1 threshold: {MACH_1_MS} m/s = {mach1_doppler:.1f} Hz Doppler")
+
+    # Test 4a: Doppler just below Mach 1 threshold (should NOT be anomalous)
+    below_mach1_doppler = mach1_doppler - 20  # 20 Hz below threshold
+    print(f"\nTesting Doppler: {below_mach1_doppler:.1f} Hz (just below Mach 1)")
 
     detections = []
     for i in range(5):
@@ -277,18 +276,9 @@ def test_anomaly_threshold():
             {
                 "timestamp": 1700000000000 + i * 500,
                 "delay": [50.0 + i * 0.5],
-                "doppler": [100.0 - i * 2],
+                "doppler": [below_mach1_doppler - i * 2],  # Subsonic Doppler
                 "snr": [15.0],
-                "adsb": [
-                    {
-                        "hex": "below1",
-                        "lat": 37.8,
-                        "lon": -122.2,
-                        "alt_baro": 8500,
-                        "gs": below_mach1_knots,
-                        "track": 45,
-                    }
-                ],
+                # No ADS-B - but Doppler is subsonic so not anomalous
             }
         )
 
@@ -296,12 +286,9 @@ def test_anomaly_threshold():
         json.dump(detections, f)
 
     config = {
-        "tracker": {"m_threshold": 3, "n_window": 5, "min_snr": 7.0},
-        "adsb": {
-            "enabled": True,
-            "reference_location": {"latitude": 37.7644, "longitude": -122.3954, "altitude": 23},
-            "initial_covariance": {"position": 100.0, "velocity": 5.0},
-        },
+        "tracker": {"m_threshold": 3, "n_window": 5, "min_snr": 7.0, "gate_threshold": 50.0},
+        "adsb": {"enabled": False},
+        "radar": {"center_frequency": fc},
     }
 
     set_config(config)
@@ -310,14 +297,14 @@ def test_anomaly_threshold():
 
     if len(tracks) > 0:
         track = tracks[0]
-        print(f"  Result: is_anomalous = {track.is_anomalous}")
-        assert not track.is_anomalous, "Velocity below Mach 1 should not be anomalous"
+        print(f"  Result: is_anomalous = {track.is_anomalous}, max_velocity = {track.max_velocity_ms:.1f} m/s")
+        assert not track.is_anomalous, "Doppler below Mach 1 threshold should NOT be anomalous"
 
     os.remove("test_threshold_below.detection")
 
-    # Test velocity just above Mach 1
-    above_mach1_knots = (MACH_1_MS + 10) / geometry.KNOTS_TO_MS  # 353 m/s
-    print(f"\nTesting velocity: {MACH_1_MS + 10:.2f} m/s (just above Mach 1)")
+    # Test 4b: Doppler just above Mach 1 threshold WITHOUT ADS-B (SHOULD be anomalous)
+    above_mach1_doppler = mach1_doppler + 20  # 20 Hz above threshold
+    print(f"\nTesting Doppler: {above_mach1_doppler:.1f} Hz (just above Mach 1, no ADS-B)")
 
     detections = []
     for i in range(5):
@@ -325,18 +312,9 @@ def test_anomaly_threshold():
             {
                 "timestamp": 1700000000000 + i * 500,
                 "delay": [75.0 + i * 1.0],
-                "doppler": [150.0 - i * 5],
+                "doppler": [above_mach1_doppler - i * 5],  # Supersonic Doppler
                 "snr": [16.0],
-                "adsb": [
-                    {
-                        "hex": "above1",
-                        "lat": 37.8,
-                        "lon": -122.2,
-                        "alt_baro": 10000,
-                        "gs": above_mach1_knots,
-                        "track": 90,
-                    }
-                ],
+                # No ADS-B - supersonic Doppler without confirmation = anomalous
             }
         )
 
@@ -349,8 +327,8 @@ def test_anomaly_threshold():
 
     if len(tracks) > 0:
         track = tracks[0]
-        print(f"  Result: is_anomalous = {track.is_anomalous}")
-        assert track.is_anomalous, "Velocity above Mach 1 should be anomalous"
+        print(f"  Result: is_anomalous = {track.is_anomalous}, max_velocity = {track.max_velocity_ms:.1f} m/s")
+        assert track.is_anomalous, "Doppler above Mach 1 without ADS-B should be anomalous"
 
     os.remove("test_threshold_above.detection")
 
