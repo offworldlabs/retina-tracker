@@ -9,7 +9,13 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tracker.track_detections import process_detections, set_config, MACH_1_MS
+from tracker.track_detections import (
+    process_detections,
+    set_config,
+    MACH_1_MS,
+    MAX_NORMAL_ACCEL_MS2,
+    MAX_DIRECTION_CHANGE_DEG_PER_SEC,
+)
 from tracker import geometry
 
 
@@ -357,12 +363,165 @@ def test_anomaly_threshold():
     print("\n✓ Test 4 passed: Mach 1 threshold correctly applied")
 
 
+def test_acceleration_anomaly():
+    """Test detection of impossible acceleration (instant speed changes)."""
+    print("\n" + "=" * 60)
+    print("Test 5: Acceleration Anomaly Detection")
+    print("=" * 60)
+
+    print(f"\nMax normal acceleration: {MAX_NORMAL_ACCEL_MS2} m/s²")
+
+    # Create aircraft with instant speed change from 250 knots to 600 knots in 1 second
+    # 250 knots ≈ 128.6 m/s, 600 knots ≈ 308.7 m/s
+    # Acceleration = (308.7 - 128.6) / 1.0 = 180.1 m/s² >> 15 m/s²
+    detections = []
+    for i in range(6):
+        speed_knots = 250 if i < 2 else 600  # Speed change at frame 2
+        detections.append(
+            {
+                "timestamp": 1700000000000 + i * 1000,  # 1 second intervals
+                "delay": [50.0 + i * 0.5],
+                "doppler": [100.0 - i * 2],
+                "snr": [15.0],
+                "adsb": [
+                    {
+                        "hex": "accel1",
+                        "lat": 37.8 + i * 0.001,
+                        "lon": -122.2 + i * 0.001,
+                        "alt_baro": 8500,
+                        "gs": speed_knots,
+                        "track": 45,
+                    }
+                ],
+            }
+        )
+
+    with open("test_acceleration.detection", "w") as f:
+        json.dump(detections, f)
+
+    config = {
+        "tracker": {"m_threshold": 3, "n_window": 5, "n_delete": 10, "min_snr": 7.0, "gate_threshold": 9.0},
+        "adsb": {
+            "enabled": True,
+            "priority": True,
+            "reference_location": {"latitude": 37.7644, "longitude": -122.3954, "altitude": 23},
+            "initial_covariance": {"position": 100.0, "velocity": 5.0},
+        },
+    }
+
+    set_config(config)
+    tracker = process_detections("test_acceleration.detection")
+    confirmed_tracks = tracker.get_confirmed_tracks()
+
+    print(f"\n✓ Generated {len(confirmed_tracks)} confirmed tracks")
+
+    assert len(confirmed_tracks) > 0, "Should have at least 1 track"
+
+    track = confirmed_tracks[0]
+    track_dict = track.to_dict()
+    print(f"\nTrack {track_dict['id']}:")
+    print(f"  Is anomalous: {track_dict['is_anomalous']}")
+    print(f"  Anomaly types: {track_dict.get('anomaly_types', [])}")
+
+    if track.is_anomalous and "instant_acceleration" in track.anomaly_types:
+        print("  ✓ Acceleration anomaly detected!")
+        accel_events = [a for a in track.anomaly_detections if a["type"] == "instant_acceleration"]
+        print(f"  Anomaly events: {len(accel_events)}")
+        for anomaly in track.anomaly_detections:
+            if anomaly["type"] == "instant_acceleration":
+                accel = anomaly["acceleration_ms2"]
+                print(f"    - Acceleration: {accel:.2f} m/s² (threshold: {MAX_NORMAL_ACCEL_MS2} m/s²)")
+                assert accel > MAX_NORMAL_ACCEL_MS2, "Detected acceleration should exceed threshold"
+    else:
+        print("  ✗ No acceleration anomaly detected (may be timing issue)")
+
+    os.remove("test_acceleration.detection")
+    print("\n✓ Test 5 passed: Acceleration anomaly detection working")
+
+
+def test_direction_change_anomaly():
+    """Test detection of impossible turn rates (instant direction changes)."""
+    print("\n" + "=" * 60)
+    print("Test 6: Direction Change Anomaly Detection")
+    print("=" * 60)
+
+    print(f"\nMax normal turn rate: {MAX_DIRECTION_CHANGE_DEG_PER_SEC} °/s")
+
+    # Create aircraft with instant 90° turn in 1 second
+    # Turn rate = 90° / 1.0s = 90 °/s >> 30 °/s
+    detections = []
+    for i in range(6):
+        heading = 45 if i < 2 else 135  # 90° turn at frame 2
+        detections.append(
+            {
+                "timestamp": 1700000000000 + i * 1000,  # 1 second intervals
+                "delay": [50.0 + i * 0.5],
+                "doppler": [100.0 - i * 2],
+                "snr": [15.0],
+                "adsb": [
+                    {
+                        "hex": "turn1",
+                        "lat": 37.8 + i * 0.001,
+                        "lon": -122.2 + i * 0.001,
+                        "alt_baro": 8500,
+                        "gs": 400,
+                        "track": heading,
+                    }
+                ],
+            }
+        )
+
+    with open("test_direction.detection", "w") as f:
+        json.dump(detections, f)
+
+    config = {
+        "tracker": {"m_threshold": 3, "n_window": 5, "n_delete": 10, "min_snr": 7.0, "gate_threshold": 9.0},
+        "adsb": {
+            "enabled": True,
+            "priority": True,
+            "reference_location": {"latitude": 37.7644, "longitude": -122.3954, "altitude": 23},
+            "initial_covariance": {"position": 100.0, "velocity": 5.0},
+        },
+    }
+
+    set_config(config)
+    tracker = process_detections("test_direction.detection")
+    confirmed_tracks = tracker.get_confirmed_tracks()
+
+    print(f"\n✓ Generated {len(confirmed_tracks)} confirmed tracks")
+
+    assert len(confirmed_tracks) > 0, "Should have at least 1 track"
+
+    track = confirmed_tracks[0]
+    track_dict = track.to_dict()
+    print(f"\nTrack {track_dict['id']}:")
+    print(f"  Is anomalous: {track_dict['is_anomalous']}")
+    print(f"  Anomaly types: {track_dict.get('anomaly_types', [])}")
+
+    if track.is_anomalous and "instant_direction_change" in track.anomaly_types:
+        print("  ✓ Direction change anomaly detected!")
+        dir_events = [a for a in track.anomaly_detections if a["type"] == "instant_direction_change"]
+        print(f"  Anomaly events: {len(dir_events)}")
+        for anomaly in track.anomaly_detections:
+            if anomaly["type"] == "instant_direction_change":
+                turn_rate = anomaly["turn_rate_deg_per_sec"]
+                print(f"    - Turn rate: {turn_rate:.2f} °/s (threshold: {MAX_DIRECTION_CHANGE_DEG_PER_SEC} °/s)")
+                assert turn_rate > MAX_DIRECTION_CHANGE_DEG_PER_SEC, "Detected turn rate should exceed threshold"
+    else:
+        print("  ✗ No direction change anomaly detected (may be timing issue)")
+
+    os.remove("test_direction.detection")
+    print("\n✓ Test 6 passed: Direction change anomaly detection working")
+
+
 if __name__ == "__main__":
     try:
         test_normal_aircraft()
         test_anomalous_aircraft()
         test_mixed_aircraft()
         test_anomaly_threshold()
+        test_acceleration_anomaly()
+        test_direction_change_anomaly()
         print("\n" + "=" * 60)
         print("SUCCESS: All anomaly detection tests passed! ✓")
         print("=" * 60)

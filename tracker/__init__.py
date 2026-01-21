@@ -38,13 +38,13 @@ from .track_detections import (
 )
 
 __all__ = [
-    'Tracker',
-    'Track',
-    'TrackEventWriter',
-    'KalmanFilter',
-    'TrackState',
-    'load_config',
-    'get_config',
-    'set_config',
-    'process_streaming_frame',
+    "Tracker",
+    "Track",
+    "TrackEventWriter",
+    "KalmanFilter",
+    "TrackState",
+    "load_config",
+    "get_config",
+    "set_config",
+    "process_streaming_frame",
 ]
