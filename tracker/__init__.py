@@ -22,20 +22,16 @@ Usage:
     tracks = tracker.get_tracks()
 """
 
-from .track_detections import (
-    # Core classes
-    Tracker,
-    Track,
-    TrackEventWriter,
-    KalmanFilter,
-    TrackState,
-    # Configuration
+from .config import (
     load_config,
     get_config,
     set_config,
-    # Frame processing
-    process_streaming_frame,
 )
+from .kalman import KalmanFilter
+from .track import Track, TrackState
+from .tracker import Tracker
+from .output import TrackEventWriter
+from .server import process_streaming_frame
 
 __all__ = [
     "Tracker",
