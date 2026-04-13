@@ -5,11 +5,8 @@ Test ADS-B tracking features with synthetic data.
 
 import json
 import os
-import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from tracker.track_detections import process_detections, set_config
+from retina_tracker.track_detections import process_detections, set_config
 
 
 def create_test_detection_file():

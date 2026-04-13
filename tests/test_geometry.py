@@ -4,11 +4,8 @@ Tests for geometry coordinate conversion functions.
 """
 
 import numpy as np
-import sys
-import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from tracker import geometry
+from retina_tracker import geometry
 
 
 def test_ft2m():

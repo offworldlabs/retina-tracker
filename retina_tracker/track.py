@@ -17,6 +17,15 @@ from .config import (
     N_WINDOW,
     _get_param,
     get_mach1_doppler_threshold,
+    ORBIT_HEADING_WINDOW,
+    ORBIT_MIN_CUMULATIVE_DEG,
+    SPOOF_POSITION_EPSILON_DEG,
+    SPOOF_MIN_SPEED_KTS,
+    SPOOF_MIN_FROZEN_FRAMES,
+    ALTITUDE_JUMP_THRESHOLD_FT,
+    ANOMALOUS_ACCEL_MS2,
+    LONG_HOVER_POSITION_EPSILON_DEG,
+    LONG_HOVER_MIN_DURATION_S,
 )
 
 
@@ -48,6 +57,12 @@ class Track:
         else:
             self._init_from_delay_doppler(detection)
 
+        # Capture ADS-B hex even when not using ADS-B for state initialization
+        if self.adsb_hex is None and detection.get("adsb"):
+            _det_hex = detection["adsb"].get("hex")
+            if _det_hex and isinstance(_det_hex, str):
+                self.adsb_hex = _det_hex
+
         self.history = {
             "timestamps": [timestamp],
             "frames": [frame],
@@ -70,8 +85,26 @@ class Track:
         self.anomaly_types = set()
         self.last_velocity_ms = None
         self.last_heading_deg = None
+        self._heading_changes = []
+        self._last_adsb_lat = None
+        self._last_adsb_lon = None
+        self._adsb_frozen_count = 0
+        self._last_alt_baro = None
+        self._hover_anchor_lat = None
+        self._hover_anchor_lon = None
+        self._hover_start_ts = None
+        self._anomalous_accel_last_velocity_ms = None  # separate from last_velocity_ms (updated by _check_acceleration_anomaly)
         self._check_velocity_anomaly(detection, timestamp)
         self._check_doppler_anomaly(detection)
+        # Store initial ADS-B reference values for change-detection checks
+        _init_adsb = detection.get("adsb")
+        if _init_adsb and isinstance(_init_adsb, dict) and self._validate_adsb_data(_init_adsb):
+            self._last_adsb_lat = _init_adsb.get("lat")
+            self._last_adsb_lon = _init_adsb.get("lon")
+            self._last_alt_baro = _init_adsb.get("alt_baro")
+            _hdg = _init_adsb.get("track")
+            if _hdg is not None and isinstance(_hdg, (int, float)) and not np.isnan(_hdg):
+                self.last_heading_deg = _hdg
 
     @staticmethod
     def _validate_adsb_data(adsb):
@@ -235,6 +268,208 @@ class Track:
         self.last_heading_deg = track
         return False
 
+    def _check_sustained_turn_anomaly(self, detection, timestamp):
+        """Detect sustained orbiting: continuous high turn rate over multiple frames."""
+        if not detection.get("adsb"):
+            return False
+        track_hdg = detection["adsb"].get("track")
+        if track_hdg is None or not isinstance(track_hdg, (int, float)) or np.isnan(track_hdg):
+            return False
+        if self.last_heading_deg is not None:
+            delta = abs(track_hdg - self.last_heading_deg)
+            if delta > 180:
+                delta = 360 - delta
+            self._heading_changes.append(delta)
+            if len(self._heading_changes) > ORBIT_HEADING_WINDOW:
+                self._heading_changes = self._heading_changes[-ORBIT_HEADING_WINDOW:]
+            if len(self._heading_changes) >= ORBIT_HEADING_WINDOW:
+                total = sum(self._heading_changes)
+                if total >= ORBIT_MIN_CUMULATIVE_DEG:
+                    self.is_anomalous = True
+                    self.anomaly_types.add("sustained_orbit")
+                    self.anomaly_detections.append({
+                        "timestamp": timestamp,
+                        "type": "sustained_orbit",
+                        "cumulative_heading_change_deg": total,
+                        "window_frames": len(self._heading_changes),
+                    })
+                    return True
+        return False
+
+    def _check_position_mismatch_anomaly(self, detection, timestamp):
+        """Detect GPS spoofing: ADS-B position frozen while aircraft reports movement."""
+        if not detection.get("adsb"):
+            return False
+        adsb = detection["adsb"]
+        lat = adsb.get("lat")
+        lon = adsb.get("lon")
+        gs = adsb.get("gs")
+        if lat is None or lon is None or gs is None:
+            return False
+        if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+            return False
+        if np.isnan(lat) or np.isnan(lon):
+            return False
+        if self._last_adsb_lat is not None and self._last_adsb_lon is not None:
+            dlat = abs(lat - self._last_adsb_lat)
+            dlon = abs(lon - self._last_adsb_lon)
+            if gs > SPOOF_MIN_SPEED_KTS and dlat < SPOOF_POSITION_EPSILON_DEG and dlon < SPOOF_POSITION_EPSILON_DEG:
+                self._adsb_frozen_count += 1
+            else:
+                self._adsb_frozen_count = 0
+            if self._adsb_frozen_count >= SPOOF_MIN_FROZEN_FRAMES:
+                self.is_anomalous = True
+                self.anomaly_types.add("position_mismatch")
+                self.anomaly_detections.append({
+                    "timestamp": timestamp,
+                    "type": "position_mismatch",
+                    "frozen_frames": self._adsb_frozen_count,
+                    "reported_gs_kts": gs,
+                    "position_delta_deg": max(dlat, dlon),
+                })
+                self._last_adsb_lat = lat
+                self._last_adsb_lon = lon
+                return True
+        self._last_adsb_lat = lat
+        self._last_adsb_lon = lon
+        return False
+
+    def _check_identity_change_anomaly(self, detection, timestamp):
+        """Detect transponder identity swap: ADS-B hex changes on continuous track."""
+        if not detection.get("adsb"):
+            return False
+        new_hex = detection["adsb"].get("hex")
+        if not new_hex or not isinstance(new_hex, str):
+            return False
+        if self.adsb_hex is not None and new_hex.strip().lower() != self.adsb_hex.strip().lower():
+            old_hex = self.adsb_hex
+            self.is_anomalous = True
+            self.anomaly_types.add("identity_swap")
+            self.anomaly_detections.append({
+                "timestamp": timestamp,
+                "type": "identity_swap",
+                "old_hex": old_hex,
+                "new_hex": new_hex,
+            })
+            return True
+        return False
+
+    def _check_altitude_anomaly(self, detection, timestamp):
+        """Detect impossible altitude jumps between consecutive frames."""
+        if not detection.get("adsb"):
+            return False
+        alt_baro = detection["adsb"].get("alt_baro")
+        if alt_baro is None or not isinstance(alt_baro, (int, float)) or np.isnan(alt_baro):
+            return False
+        if self._last_alt_baro is not None:
+            dalt = abs(alt_baro - self._last_alt_baro)
+            if dalt > ALTITUDE_JUMP_THRESHOLD_FT:
+                self.is_anomalous = True
+                self.anomaly_types.add("altitude_jump")
+                self.anomaly_detections.append({
+                    "timestamp": timestamp,
+                    "type": "altitude_jump",
+                    "altitude_change_ft": dalt,
+                    "old_alt_ft": self._last_alt_baro,
+                    "new_alt_ft": alt_baro,
+                })
+                self._last_alt_baro = alt_baro
+                return True
+        self._last_alt_baro = alt_baro
+        return False
+
+    def _check_anomalous_acceleration(self, detection, timestamp):
+        """Detect extreme acceleration exceeding 10g (98.1 m/s²).
+
+        Uses a dedicated velocity field (_anomalous_accel_last_velocity_ms)
+        because last_velocity_ms is already updated by _check_acceleration_anomaly
+        (which runs earlier in update()) — reading it here would always give dv=0.
+        """
+        if not detection.get("adsb"):
+            return False
+
+        adsb = detection["adsb"]
+        gs = adsb.get("gs")
+
+        if gs is None or not isinstance(gs, (int, float)) or np.isnan(gs):
+            return False
+
+        velocity_ms = geometry.knots_to_ms(gs)
+
+        result = False
+        if self._anomalous_accel_last_velocity_ms is not None and len(self.history["timestamps"]) > 1:
+            dt = (timestamp - self.history["timestamps"][-2]) / 1000.0
+
+            if dt > 0 and dt < 120.0:
+                dv = abs(velocity_ms - self._anomalous_accel_last_velocity_ms)
+                acceleration = dv / dt
+
+                if acceleration > ANOMALOUS_ACCEL_MS2:
+                    self.is_anomalous = True
+                    self.anomaly_types.add("anomalous_acceleration")
+                    self.anomaly_detections.append({
+                        "timestamp": timestamp,
+                        "type": "anomalous_acceleration",
+                        "acceleration_ms2": acceleration,
+                        "acceleration_g": round(acceleration / 9.81, 1),
+                        "velocity_change_ms": dv,
+                        "time_delta_sec": dt,
+                    })
+                    result = True
+
+        self._anomalous_accel_last_velocity_ms = velocity_ms
+        return result
+
+    def _check_long_hover(self, detection, timestamp):
+        """Detect long hover: position unchanged for 15 min while detections arrive."""
+        if not detection.get("adsb"):
+            return False
+
+        adsb = detection["adsb"]
+        lat = adsb.get("lat")
+        lon = adsb.get("lon")
+
+        if lat is None or lon is None:
+            return False
+        if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+            return False
+        if np.isnan(lat) or np.isnan(lon):
+            return False
+
+        if self._hover_anchor_lat is None:
+            self._hover_anchor_lat = lat
+            self._hover_anchor_lon = lon
+            self._hover_start_ts = timestamp
+            return False
+
+        dlat = abs(lat - self._hover_anchor_lat)
+        dlon = abs(lon - self._hover_anchor_lon)
+
+        if dlat < LONG_HOVER_POSITION_EPSILON_DEG and dlon < LONG_HOVER_POSITION_EPSILON_DEG:
+            duration_s = (timestamp - self._hover_start_ts) / 1000.0
+            if duration_s >= LONG_HOVER_MIN_DURATION_S:
+                self.is_anomalous = True
+                self.anomaly_types.add("long_hover")
+                self.anomaly_detections.append({
+                    "timestamp": timestamp,
+                    "type": "long_hover",
+                    "hover_duration_s": round(duration_s, 1),
+                    "anchor_lat": self._hover_anchor_lat,
+                    "anchor_lon": self._hover_anchor_lon,
+                })
+                # Reset anchor to avoid repeated firing every frame
+                self._hover_anchor_lat = lat
+                self._hover_anchor_lon = lon
+                self._hover_start_ts = timestamp
+                return True
+        else:
+            # Position moved — reset anchor
+            self._hover_anchor_lat = lat
+            self._hover_anchor_lon = lon
+            self._hover_start_ts = timestamp
+
+        return False
+
     def _init_from_adsb(self, detection, adsb_config):
         adsb = detection["adsb"]
 
@@ -298,6 +533,18 @@ class Track:
         measurement = np.array([detection["delay"], detection["doppler"]])
         self.state, self.covariance = self.kf.update(self.state, self.covariance, measurement, detection.get("snr"))
 
+        # Identity swap check MUST run before adsb_hex capture
+        self._check_identity_change_anomaly(detection, timestamp)
+
+        # Capture ADS-B hex on first association that carries one.  Tracks
+        # initialised from clutter miss this in __init__; this back-fills it.
+        _det_adsb = detection.get("adsb")
+        if self.adsb_hex is None and _det_adsb:
+            adsb = _det_adsb
+            if self._validate_adsb_data(adsb) and adsb.get("hex"):
+                self.adsb_hex = adsb["hex"]
+                self.adsb_initialized = True
+
         self.history["timestamps"].append(timestamp)
         self.history["frames"].append(frame)
         self.history["states"].append(self.state.copy())
@@ -314,7 +561,12 @@ class Track:
         self._check_velocity_anomaly(detection, timestamp)
         self._check_doppler_anomaly(detection)
         self._check_acceleration_anomaly(detection, timestamp)
+        self._check_sustained_turn_anomaly(detection, timestamp)
         self._check_direction_change_anomaly(detection, timestamp)
+        self._check_position_mismatch_anomaly(detection, timestamp)
+        self._check_altitude_anomaly(detection, timestamp)
+        self._check_anomalous_acceleration(detection, timestamp)
+        self._check_long_hover(detection, timestamp)
 
     def mark_missed(self, timestamp, frame=0):
         """Mark track as not associated this frame."""
@@ -389,19 +641,26 @@ class Track:
             return "long"
 
     def get_recent_detections(self, n=20):
-        detections = []
-        for i, m in enumerate(self.history["measurements"]):
+        """Return the last *n* non-None detections (reverse scan, early exit)."""
+        measurements = self.history["measurements"]
+        timestamps = self.history["timestamps"]
+        result = []
+        for i in range(len(measurements) - 1, -1, -1):
+            m = measurements[i]
             if m is not None:
-                detections.append(
+                result.append(
                     {
-                        "timestamp": self.history["timestamps"][i],
+                        "timestamp": timestamps[i],
                         "delay": m["delay"],
                         "doppler": m["doppler"],
                         "snr": m["snr"],
                         "adsb": m.get("adsb"),
                     }
                 )
-        return detections[-n:] if n else detections
+                if len(result) >= n:
+                    break
+        result.reverse()
+        return result
 
     def to_dict(self):
         duration_sec = (self.death_timestamp - self.birth_timestamp) / 1000.0

@@ -22,7 +22,7 @@ pip install -r requirements.txt
 pip install -r requirements-dev.txt
 
 # Run tracker
-python tracker/track_detections.py --config config.yaml
+python -m retina_tracker.track_detections --config config.yaml
 
 # Run tests
 pytest tests/ -v
@@ -53,10 +53,10 @@ Before committing any code changes to retina-tracker, run these verification com
 
 ```bash
 # 1. Lint Python code
-ruff check tracker/ tests/ --select E,F,W --line-length 120
+ruff check retina_tracker/ tests/ --select E,F,W --line-length 120
 
 # 2. Check code formatting
-ruff format --check tracker/ tests/
+ruff format --check retina_tracker/ tests/
 
 # 3. Run all tests
 pytest tests/ -v
@@ -70,10 +70,10 @@ If linting or formatting issues are found, use these commands to automatically f
 
 ```bash
 # Auto-fix linting issues
-ruff check --fix tracker/ tests/ --select E,F,W --line-length 120
+ruff check --fix retina_tracker/ tests/ --select E,F,W --line-length 120
 
 # Auto-format code
-ruff format tracker/ tests/
+ruff format retina_tracker/ tests/
 ```
 
 ### Workflow

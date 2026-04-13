@@ -6,7 +6,7 @@ Supports two deployment modes:
 - Server mode: Central server aggregates detections from multiple nodes
 
 Usage:
-    from tracker import Tracker, TrackEventWriter, load_config
+    from retina_tracker import Tracker, TrackEventWriter, load_config
 
     # Configure
     config = load_config('config.yaml')

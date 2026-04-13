@@ -1,12 +1,13 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY pyproject.toml requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
+RUN pip install --no-cache-dir .
 
 EXPOSE 30100
 
-CMD ["python", "-m", "tracker.track_detections", "--tcp", "--tcp-host", "0.0.0.0", "--tcp-port", "30100", "-s", "-"]
+CMD ["python", "-m", "retina_tracker.track_detections", "--tcp", "--tcp-host", "0.0.0.0", "--tcp-port", "30100", "-s", "-"]

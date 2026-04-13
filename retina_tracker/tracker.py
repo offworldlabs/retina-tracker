@@ -49,6 +49,8 @@ class Tracker:
         associated_tracks = set()
         associated_detections = set()
 
+        _lazy_write = hasattr(self.event_writer, 'write_event_lazy') if self.event_writer else False
+
         for track_idx, det_idx in associations:
             track = self.tracks[track_idx]
             det = detections[det_idx]
@@ -59,17 +61,32 @@ class Tracker:
             associated_detections.add(det_idx)
 
             if track.id and self.event_writer:
-                detections_window = track.get_recent_detections(n=self.detection_window)
-                self.event_writer.write_event(
-                    track.id,
-                    timestamp,
-                    track.n_associated,
-                    detections_window,
-                    adsb_hex=track.adsb_hex,
-                    adsb_initialized=track.adsb_initialized,
-                    is_anomalous=track.is_anomalous,
-                    max_velocity_ms=track.max_velocity_ms,
-                )
+                _det_n = min(track.n_associated, self.detection_window)
+                if _lazy_write:
+                    self.event_writer.write_event_lazy(
+                        track.id,
+                        timestamp,
+                        _det_n,
+                        track,
+                        adsb_hex=track.adsb_hex,
+                        adsb_initialized=track.adsb_initialized,
+                        is_anomalous=track.is_anomalous,
+                        max_velocity_ms=track.max_velocity_ms,
+                        anomaly_types=track.anomaly_types,
+                    )
+                else:
+                    detections_window = track.get_recent_detections(n=self.detection_window)
+                    self.event_writer.write_event(
+                        track.id,
+                        timestamp,
+                        track.n_associated,
+                        detections_window,
+                        adsb_hex=track.adsb_hex,
+                        adsb_initialized=track.adsb_initialized,
+                        is_anomalous=track.is_anomalous,
+                        max_velocity_ms=track.max_velocity_ms,
+                        anomaly_types=track.anomaly_types,
+                    )
 
         for i, track in enumerate(self.tracks):
             if i not in associated_tracks:
@@ -82,17 +99,32 @@ class Tracker:
             if promoted:
                 track.id = Track._generate_id(timestamp, adsb_hex=track.adsb_hex)
                 if self.event_writer:
-                    detections_list = track.get_recent_detections(n=track.n_associated)
-                    self.event_writer.write_event(
-                        track.id,
-                        timestamp,
-                        track.n_associated,
-                        detections_list,
-                        adsb_hex=track.adsb_hex,
-                        adsb_initialized=track.adsb_initialized,
-                        is_anomalous=track.is_anomalous,
-                        max_velocity_ms=track.max_velocity_ms,
-                    )
+                    _det_n = min(track.n_associated, self.detection_window)
+                    if _lazy_write:
+                        self.event_writer.write_event_lazy(
+                            track.id,
+                            timestamp,
+                            _det_n,
+                            track,
+                            adsb_hex=track.adsb_hex,
+                            adsb_initialized=track.adsb_initialized,
+                            is_anomalous=track.is_anomalous,
+                            max_velocity_ms=track.max_velocity_ms,
+                            anomaly_types=track.anomaly_types,
+                        )
+                    else:
+                        detections_list = track.get_recent_detections(n=_det_n)
+                        self.event_writer.write_event(
+                            track.id,
+                            timestamp,
+                            _det_n,
+                            detections_list,
+                            adsb_hex=track.adsb_hex,
+                            adsb_initialized=track.adsb_initialized,
+                            is_anomalous=track.is_anomalous,
+                            max_velocity_ms=track.max_velocity_ms,
+                            anomaly_types=track.anomaly_types,
+                        )
 
         for i, det in enumerate(detections):
             if i not in associated_detections:
@@ -107,6 +139,14 @@ class Tracker:
                 self.all_tracks.append(track)
         self.tracks = [t for t in self.tracks if not t.should_delete()]
 
+        # Prune all_tracks to the merge-window (5 s = 5000 ms) so _merge_tracks
+        # stays O(window²) instead of O(uptime²).  Entries older than the window
+        # can never be paired with new tracks, so they are safe to discard.
+        _MERGE_WINDOW_MS = 5000
+        if self.all_tracks:
+            cutoff = timestamp - _MERGE_WINDOW_MS
+            self.all_tracks = [t for t in self.all_tracks if t.death_timestamp >= cutoff]
+
         if len(self.all_tracks) > 1:
             self._merge_tracks()
 
@@ -120,41 +160,48 @@ class Tracker:
         n_dets = len(detections)
         cost_matrix = np.full((n_tracks, n_dets), 1e6)
 
+        # Pre-compute detection measurements as a single (n_dets, 2) array
+        # to avoid creating n_tracks × n_dets individual numpy arrays.
+        det_z = np.array([[d["delay"], d["doppler"]] for d in detections])
+        det_snr = np.array([d.get("snr", 10.0) for d in detections])
+        snr_weights = 20.0 / np.maximum(det_snr, 5.0)
+
+        base_gate = GATE_THRESHOLD()
+        adsb_priority = self.config.get("adsb", {}).get("priority")
+
         for i, track in enumerate(self.tracks):
             z_pred = track.get_predicted_measurement()
             S = track.get_innovation_covariance()
 
-            try:
-                S_inv = np.linalg.inv(S)
-            except np.linalg.LinAlgError:
-                print(
-                    f"Warning: Singular innovation covariance for track {track.id}, skipping association",
-                    file=sys.stderr,
-                )
+            # Analytical 2×2 inverse (avoids numpy.linalg.inv per-track overhead)
+            det_S = S[0, 0] * S[1, 1] - S[0, 1] * S[1, 0]
+            if abs(det_S) < 1e-15:
+                continue
+            inv_det = 1.0 / det_S
+            S_inv = np.array([
+                [S[1, 1] * inv_det, -S[0, 1] * inv_det],
+                [-S[1, 0] * inv_det, S[0, 0] * inv_det],
+            ])
+
+            gate = base_gate
+            if track.state_status == TrackState.COASTING and track.n_missed > 0:
+                gate = base_gate * min(1.0 + 0.1 * track.n_missed, 1.2)
+
+            # Vectorized Mahalanobis distance for all detections at once
+            innovations = det_z - z_pred                     # (n_dets, 2)
+            tmp = innovations @ S_inv                        # (n_dets, 2)
+            mahal = np.sum(tmp * innovations, axis=1)        # (n_dets,)
+
+            within_gate = mahal < gate
+            if not np.any(within_gate):
                 continue
 
-            gate_threshold = GATE_THRESHOLD()
-            if track.state_status == TrackState.COASTING and track.n_missed > 0:
-                expansion = min(1.0 + 0.1 * track.n_missed, 1.2)
-                gate_threshold = GATE_THRESHOLD() * expansion
-
-            for j, det in enumerate(detections):
-                z = np.array([det["delay"], det["doppler"]])
-                innovation = z - z_pred
-
-                mahal_dist = innovation.T @ S_inv @ innovation
-
-                if mahal_dist < gate_threshold:
-                    cost = mahal_dist
-
-                    snr = det.get("snr", 10.0)
-                    snr_weight = 20.0 / max(snr, 5.0)
-                    cost *= snr_weight
-
-                    if self.config.get("adsb", {}).get("priority") and track.adsb_initialized:
-                        cost *= 0.8
-
-                    cost_matrix[i, j] = cost
+            costs = mahal * snr_weights
+            if adsb_priority and track.adsb_initialized:
+                costs *= 0.8
+            # Write only gated entries into cost matrix
+            mask_indices = np.where(within_gate)[0]
+            cost_matrix[i, mask_indices] = costs[mask_indices]
 
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
@@ -223,12 +270,6 @@ class Tracker:
 
                 track.id = Track._generate_id(timestamp, adsb_hex=track.adsb_hex)
 
-                print(
-                    f"Track {track.id} promoted to ACTIVE via tracklet (linear fit: "
-                    f"v_delay={delay_velocity:.2f}, v_doppler={doppler_velocity:.2f})",
-                    file=sys.stderr,
-                )
-
                 if self.event_writer:
                     detections_list = track.get_recent_detections(n=track.n_associated)
                     self.event_writer.write_event(
@@ -240,6 +281,7 @@ class Tracker:
                         adsb_initialized=track.adsb_initialized,
                         is_anomalous=track.is_anomalous,
                         max_velocity_ms=track.max_velocity_ms,
+                        anomaly_types=track.anomaly_types,
                     )
 
     def _merge_tracks(self):

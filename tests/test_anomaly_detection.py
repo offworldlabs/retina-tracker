@@ -5,18 +5,15 @@ Test anomaly detection for supersonic targets (Mach 1+).
 
 import json
 import os
-import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from tracker.track_detections import (
+from retina_tracker.track_detections import (
     process_detections,
     set_config,
     MACH_1_MS,
     MAX_NORMAL_ACCEL_MS2,
     MAX_DIRECTION_CHANGE_DEG_PER_SEC,
 )
-from tracker import geometry
+from retina_tracker import geometry
 
 
 def create_normal_aircraft_data():
@@ -33,8 +30,8 @@ def create_normal_aircraft_data():
                 "adsb": [
                     {
                         "hex": "abc123",
-                        "lat": 37.8 + i * 0.001,
-                        "lon": -122.2 + i * 0.001,
+                        "lat": 37.8 + i * 0.003,
+                        "lon": -122.2 + i * 0.003,
                         "alt_baro": 8500 + i * 100,
                         "gs": 250,  # ~450 km/h, well below Mach 1
                         "track": 45,
@@ -98,8 +95,8 @@ def create_mixed_aircraft_data():
             "adsb": [
                 {
                     "hex": "normal1",
-                    "lat": 37.8 + i * 0.001,
-                    "lon": -122.2 + i * 0.001,
+                    "lat": 37.8 + i * 0.003,
+                    "lon": -122.2 + i * 0.003,
                     "alt_baro": 8500,
                     "gs": 250,  # Normal speed - confirms subsonic
                     "track": 45,
