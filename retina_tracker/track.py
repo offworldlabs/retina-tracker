@@ -94,6 +94,10 @@ class Track:
         self._hover_anchor_lon = None
         self._hover_start_ts = None
         self._anomalous_accel_last_velocity_ms = None  # separate from last_velocity_ms (updated by _check_acceleration_anomaly)
+        # Identity-swap debounce: require 2 consecutive frames with same new hex
+        # before flagging.  A single misassociation resets the counter.
+        self._identity_mismatch_count = 0
+        self._pending_identity_hex: str | None = None
         self._check_velocity_anomaly(detection, timestamp)
         self._check_doppler_anomaly(detection)
         # Store initial ADS-B reference values for change-detection checks
@@ -335,13 +339,37 @@ class Track:
         return False
 
     def _check_identity_change_anomaly(self, detection, timestamp):
-        """Detect transponder identity swap: ADS-B hex changes on continuous track."""
+        """Detect transponder identity swap: ADS-B hex changes on continuous track.
+
+        Requires the same new hex to appear in 2 *consecutive* frames before
+        flagging.  A single-frame misassociation (GNN noise) resets the counter
+        on the next correctly-associated frame, suppressing false positives that
+        dominated the anomaly count in dense simulations.
+        """
         if not detection.get("adsb"):
+            # Non-ADS-B frame — reset debounce, nothing to check
+            self._identity_mismatch_count = 0
+            self._pending_identity_hex = None
             return False
         new_hex = detection["adsb"].get("hex")
         if not new_hex or not isinstance(new_hex, str):
             return False
-        if self.adsb_hex is not None and new_hex.strip().lower() != self.adsb_hex.strip().lower():
+        if self.adsb_hex is None:
+            return False
+        new_hex_lower = new_hex.strip().lower()
+        current_lower = self.adsb_hex.strip().lower()
+        if new_hex_lower == current_lower:
+            # Hex matches — the track is stable; reset debounce
+            self._identity_mismatch_count = 0
+            self._pending_identity_hex = None
+            return False
+        # Hex mismatch: advance debounce only when the same new hex repeats
+        if self._pending_identity_hex == new_hex_lower:
+            self._identity_mismatch_count += 1
+        else:
+            self._identity_mismatch_count = 1
+            self._pending_identity_hex = new_hex_lower
+        if self._identity_mismatch_count >= 2:
             old_hex = self.adsb_hex
             self.is_anomalous = True
             self.anomaly_types.add("identity_swap")
@@ -351,16 +379,36 @@ class Track:
                 "old_hex": old_hex,
                 "new_hex": new_hex,
             })
+            # Advance adsb_hex so subsequent frames don't re-trigger
+            self.adsb_hex = new_hex
+            self._identity_mismatch_count = 0
+            self._pending_identity_hex = None
             return True
         return False
 
     def _check_altitude_anomaly(self, detection, timestamp):
-        """Detect impossible altitude jumps between consecutive frames."""
+        """Detect impossible altitude jumps between consecutive frames.
+
+        Skips the check (and does NOT update the reference altitude) when the
+        detection belongs to a *different* aircraft than the track's established
+        hex.  This prevents misassociation events (GNN associating a detection
+        from aircraft B to aircraft A's track) from triggering false
+        altitude_jump flags due to the two aircraft being at different flight
+        levels.
+        """
         if not detection.get("adsb"):
             return False
-        alt_baro = detection["adsb"].get("alt_baro")
+        adsb = detection["adsb"]
+        alt_baro = adsb.get("alt_baro")
         if alt_baro is None or not isinstance(alt_baro, (int, float)) or np.isnan(alt_baro):
             return False
+        # Guard: if the detection carries a hex that differs from this track's
+        # established identity, the data belongs to a different aircraft.
+        # Do NOT update _last_alt_baro — that would corrupt the reference.
+        if self.adsb_hex is not None:
+            det_hex = (adsb.get("hex") or "").strip().lower()
+            if det_hex and det_hex != self.adsb_hex.strip().lower():
+                return False
         if self._last_alt_baro is not None:
             dalt = abs(alt_baro - self._last_alt_baro)
             if dalt > ALTITUDE_JUMP_THRESHOLD_FT:
