@@ -5,6 +5,7 @@ Test anomaly detection for supersonic targets (Mach 1+).
 
 import json
 import os
+import sys
 
 from retina_tracker.track_detections import (
     process_detections,
@@ -13,7 +14,6 @@ from retina_tracker.track_detections import (
     MAX_NORMAL_ACCEL_MS2,
     MAX_DIRECTION_CHANGE_DEG_PER_SEC,
 )
-from retina_tracker import geometry
 
 
 def create_normal_aircraft_data():

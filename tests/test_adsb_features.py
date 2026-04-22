@@ -5,6 +5,7 @@ Test ADS-B tracking features with synthetic data.
 
 import json
 import os
+import sys
 
 from retina_tracker.track_detections import process_detections, set_config
 

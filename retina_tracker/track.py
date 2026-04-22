@@ -93,7 +93,8 @@ class Track:
         self._hover_anchor_lat = None
         self._hover_anchor_lon = None
         self._hover_start_ts = None
-        self._anomalous_accel_last_velocity_ms = None  # separate from last_velocity_ms (updated by _check_acceleration_anomaly)
+        # Separate from last_velocity_ms — updated by _check_acceleration_anomaly.
+        self._anomalous_accel_last_velocity_ms = None
         # Identity-swap debounce: require 2 consecutive frames with same new hex
         # before flagging.  A single misassociation resets the counter.
         self._identity_mismatch_count = 0

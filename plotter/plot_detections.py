@@ -79,7 +79,7 @@ def plot_detections(delays, dopplers, snrs):
                         cmap='coolwarm', s=20, alpha=0.6)
 
     # Add colorbar
-    cbar = plt.colorbar(scatter, ax=ax, label='SNR (dB)')
+    plt.colorbar(scatter, ax=ax, label='SNR (dB)')
 
     # Labels and title
     ax.set_xlabel('Delay', fontsize=12)

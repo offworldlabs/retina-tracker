@@ -1,6 +1,5 @@
 """Core Tracker class and GNN data association logic."""
 
-import sys
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
