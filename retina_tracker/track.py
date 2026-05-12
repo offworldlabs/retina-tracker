@@ -19,7 +19,6 @@ from .config import (
     get_mach1_doppler_threshold,
     ORBIT_HEADING_WINDOW,
     ORBIT_MIN_CUMULATIVE_DEG,
-    SPOOF_POSITION_EPSILON_DEG,
     SPOOF_MIN_SPEED_KTS,
     SPOOF_MIN_FROZEN_FRAMES,
     ALTITUDE_JUMP_THRESHOLD_FT,
@@ -292,17 +291,31 @@ class Track:
                 if total >= ORBIT_MIN_CUMULATIVE_DEG:
                     self.is_anomalous = True
                     self.anomaly_types.add("sustained_orbit")
-                    self.anomaly_detections.append({
-                        "timestamp": timestamp,
-                        "type": "sustained_orbit",
-                        "cumulative_heading_change_deg": total,
-                        "window_frames": len(self._heading_changes),
-                    })
+                    self.anomaly_detections.append(
+                        {
+                            "timestamp": timestamp,
+                            "type": "sustained_orbit",
+                            "cumulative_heading_change_deg": total,
+                            "window_frames": len(self._heading_changes),
+                        }
+                    )
                     return True
         return False
 
     def _check_position_mismatch_anomaly(self, detection, timestamp):
-        """Detect GPS spoofing: ADS-B position frozen while aircraft reports movement."""
+        """Detect GPS spoofing: ADS-B position frozen while aircraft reports movement.
+
+        Compares the *actual* per-frame position delta against the *expected*
+        delta from gs × dt. Flags only when actual motion is much smaller
+        than expected, so the check is not biased by frame rate or aircraft
+        speed.
+
+        The previous implementation used an absolute 220 m epsilon
+        (SPOOF_POSITION_EPSILON_DEG) without considering dt. At a 1 Hz
+        update rate any aircraft moving below ~440 kt produced a per-frame
+        delta smaller than the absolute threshold — flooding radar3 with
+        false-positive position_mismatch flags on every commercial flight.
+        """
         if not detection.get("adsb"):
             return False
         adsb = detection["adsb"]
@@ -318,20 +331,34 @@ class Track:
         if self._last_adsb_lat is not None and self._last_adsb_lon is not None:
             dlat = abs(lat - self._last_adsb_lat)
             dlon = abs(lon - self._last_adsb_lon)
-            if gs > SPOOF_MIN_SPEED_KTS and dlat < SPOOF_POSITION_EPSILON_DEG and dlon < SPOOF_POSITION_EPSILON_DEG:
-                self._adsb_frozen_count += 1
+            dt = None
+            if len(self.history["timestamps"]) > 1:
+                dt = (timestamp - self.history["timestamps"][-2]) / 1000.0
+            if dt is not None and 0 < dt < 60.0 and gs > SPOOF_MIN_SPEED_KTS:
+                # Expected per-frame delta from gs and dt, in degrees lat
+                # (≈111 km/deg). Treat both axes the same — adequate for
+                # the < 20 % "much-smaller-than-expected" comparison.
+                expected_motion_deg = (gs * KNOTS_TO_MS * dt) / 111_000.0
+                frozen_threshold = expected_motion_deg * 0.2
+                is_frozen = dlat < frozen_threshold and dlon < frozen_threshold
+                if is_frozen:
+                    self._adsb_frozen_count += 1
+                else:
+                    self._adsb_frozen_count = 0
             else:
                 self._adsb_frozen_count = 0
             if self._adsb_frozen_count >= SPOOF_MIN_FROZEN_FRAMES:
                 self.is_anomalous = True
                 self.anomaly_types.add("position_mismatch")
-                self.anomaly_detections.append({
-                    "timestamp": timestamp,
-                    "type": "position_mismatch",
-                    "frozen_frames": self._adsb_frozen_count,
-                    "reported_gs_kts": gs,
-                    "position_delta_deg": max(dlat, dlon),
-                })
+                self.anomaly_detections.append(
+                    {
+                        "timestamp": timestamp,
+                        "type": "position_mismatch",
+                        "frozen_frames": self._adsb_frozen_count,
+                        "reported_gs_kts": gs,
+                        "position_delta_deg": max(dlat, dlon),
+                    }
+                )
                 self._last_adsb_lat = lat
                 self._last_adsb_lon = lon
                 return True
@@ -374,12 +401,14 @@ class Track:
             old_hex = self.adsb_hex
             self.is_anomalous = True
             self.anomaly_types.add("identity_swap")
-            self.anomaly_detections.append({
-                "timestamp": timestamp,
-                "type": "identity_swap",
-                "old_hex": old_hex,
-                "new_hex": new_hex,
-            })
+            self.anomaly_detections.append(
+                {
+                    "timestamp": timestamp,
+                    "type": "identity_swap",
+                    "old_hex": old_hex,
+                    "new_hex": new_hex,
+                }
+            )
             # Advance adsb_hex so subsequent frames don't re-trigger
             self.adsb_hex = new_hex
             self._identity_mismatch_count = 0
@@ -415,13 +444,15 @@ class Track:
             if dalt > ALTITUDE_JUMP_THRESHOLD_FT:
                 self.is_anomalous = True
                 self.anomaly_types.add("altitude_jump")
-                self.anomaly_detections.append({
-                    "timestamp": timestamp,
-                    "type": "altitude_jump",
-                    "altitude_change_ft": dalt,
-                    "old_alt_ft": self._last_alt_baro,
-                    "new_alt_ft": alt_baro,
-                })
+                self.anomaly_detections.append(
+                    {
+                        "timestamp": timestamp,
+                        "type": "altitude_jump",
+                        "altitude_change_ft": dalt,
+                        "old_alt_ft": self._last_alt_baro,
+                        "new_alt_ft": alt_baro,
+                    }
+                )
                 self._last_alt_baro = alt_baro
                 return True
         self._last_alt_baro = alt_baro
@@ -456,14 +487,16 @@ class Track:
                 if acceleration > ANOMALOUS_ACCEL_MS2:
                     self.is_anomalous = True
                     self.anomaly_types.add("anomalous_acceleration")
-                    self.anomaly_detections.append({
-                        "timestamp": timestamp,
-                        "type": "anomalous_acceleration",
-                        "acceleration_ms2": acceleration,
-                        "acceleration_g": round(acceleration / 9.81, 1),
-                        "velocity_change_ms": dv,
-                        "time_delta_sec": dt,
-                    })
+                    self.anomaly_detections.append(
+                        {
+                            "timestamp": timestamp,
+                            "type": "anomalous_acceleration",
+                            "acceleration_ms2": acceleration,
+                            "acceleration_g": round(acceleration / 9.81, 1),
+                            "velocity_change_ms": dv,
+                            "time_delta_sec": dt,
+                        }
+                    )
                     result = True
 
         self._anomalous_accel_last_velocity_ms = velocity_ms
@@ -499,13 +532,15 @@ class Track:
             if duration_s >= LONG_HOVER_MIN_DURATION_S:
                 self.is_anomalous = True
                 self.anomaly_types.add("long_hover")
-                self.anomaly_detections.append({
-                    "timestamp": timestamp,
-                    "type": "long_hover",
-                    "hover_duration_s": round(duration_s, 1),
-                    "anchor_lat": self._hover_anchor_lat,
-                    "anchor_lon": self._hover_anchor_lon,
-                })
+                self.anomaly_detections.append(
+                    {
+                        "timestamp": timestamp,
+                        "type": "long_hover",
+                        "hover_duration_s": round(duration_s, 1),
+                        "anchor_lat": self._hover_anchor_lat,
+                        "anchor_lon": self._hover_anchor_lon,
+                    }
+                )
                 # Reset anchor to avoid repeated firing every frame
                 self._hover_anchor_lat = lat
                 self._hover_anchor_lon = lon

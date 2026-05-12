@@ -489,6 +489,129 @@ def test_direction_change_anomaly():
     print("\n✓ Test 6 passed: Direction change anomaly detection working")
 
 
+def test_position_mismatch_no_false_positive_on_slow_aircraft():
+    """A slow aircraft moving consistently must NOT trigger position_mismatch.
+
+    Regression test for radar3 false-positive flood.  The original
+    `_check_position_mismatch_anomaly` used a fixed 220 m epsilon without
+    accounting for frame rate, so any aircraft moving < ~440 kt at 1 Hz
+    update rate would be flagged as 'GPS spoofed' (its per-frame position
+    delta fell below the absolute threshold even though it matched the
+    reported groundspeed).
+    """
+    print("\n" + "=" * 60)
+    print("Test 7: position_mismatch no false positive on slow aircraft")
+    print("=" * 60)
+
+    # Aircraft at 100 kt, heading 90° (eastbound), sampled at 1 Hz.
+    # 100 kt = 51.4 m/s → expected lon change per frame ≈ 0.00056°
+    # at lat = 33.8°. Far below the old 0.002° epsilon → was flagged frozen.
+    detections = []
+    for i in range(8):
+        lon = -84.5 + (51.4 * i) / (111_000.0 * 0.83)  # eastward at 51.4 m/s
+        detections.append(
+            {
+                "timestamp": 1700000000000 + i * 1000,  # 1 Hz frames
+                "delay": [50.0 + i * 0.2],
+                "doppler": [80.0 + i * 0.5],
+                "snr": [15.0],
+                "adsb": [
+                    {
+                        "hex": "slow01",
+                        "lat": 33.8,
+                        "lon": lon,
+                        "alt_baro": 5000,
+                        "gs": 100,
+                        "track": 90,
+                    }
+                ],
+            }
+        )
+
+    with open("test_slow_aircraft.detection", "w") as f:
+        json.dump(detections, f)
+
+    config = {
+        "tracker": {"m_threshold": 3, "n_window": 5, "n_delete": 10, "min_snr": 7.0, "gate_threshold": 9.0},
+        "adsb": {
+            "enabled": True,
+            "priority": True,
+            "reference_location": {"latitude": 33.8, "longitude": -84.5, "altitude": 300},
+            "initial_covariance": {"position": 100.0, "velocity": 5.0},
+        },
+    }
+
+    set_config(config)
+    tracker = process_detections("test_slow_aircraft.detection")
+    confirmed = tracker.get_confirmed_tracks()
+    os.remove("test_slow_aircraft.detection")
+
+    assert len(confirmed) > 0, "Should track the slow aircraft"
+    track = confirmed[0]
+    print(f"  Is anomalous: {track.is_anomalous}")
+    print(f"  Anomaly types: {sorted(track.anomaly_types)}")
+    assert "position_mismatch" not in track.anomaly_types, (
+        "Slow aircraft moving consistent with its groundspeed must NOT be "
+        "flagged as position_mismatch — the actual per-frame motion matches "
+        "the reported gs."
+    )
+    print("✓ Test 7 passed: no false-positive on slow aircraft")
+
+
+def test_position_mismatch_true_positive_on_frozen_adsb():
+    """A truly frozen ADS-B feed (position never changes, gs > threshold) MUST flag."""
+    print("\n" + "=" * 60)
+    print("Test 8: position_mismatch fires when ADS-B is genuinely frozen")
+    print("=" * 60)
+
+    # Aircraft reports gs = 300 kt but position is locked.
+    detections = []
+    for i in range(8):
+        detections.append(
+            {
+                "timestamp": 1700000000000 + i * 1000,
+                "delay": [50.0 + i * 0.2],
+                "doppler": [80.0 + i * 0.5],
+                "snr": [15.0],
+                "adsb": [
+                    {
+                        "hex": "spoof1",
+                        "lat": 33.8,  # FROZEN
+                        "lon": -84.5,  # FROZEN
+                        "alt_baro": 30000,
+                        "gs": 300,  # claims to be moving fast
+                        "track": 90,
+                    }
+                ],
+            }
+        )
+
+    with open("test_frozen_adsb.detection", "w") as f:
+        json.dump(detections, f)
+
+    config = {
+        "tracker": {"m_threshold": 3, "n_window": 5, "n_delete": 10, "min_snr": 7.0, "gate_threshold": 9.0},
+        "adsb": {
+            "enabled": True,
+            "priority": True,
+            "reference_location": {"latitude": 33.8, "longitude": -84.5, "altitude": 300},
+            "initial_covariance": {"position": 100.0, "velocity": 5.0},
+        },
+    }
+
+    set_config(config)
+    tracker = process_detections("test_frozen_adsb.detection")
+    confirmed = tracker.get_confirmed_tracks()
+    os.remove("test_frozen_adsb.detection")
+
+    assert len(confirmed) > 0, "Should track the spoofed aircraft"
+    track = confirmed[0]
+    print(f"  Is anomalous: {track.is_anomalous}")
+    print(f"  Anomaly types: {sorted(track.anomaly_types)}")
+    assert "position_mismatch" in track.anomaly_types, "Frozen ADS-B with gs > 50 kts must trigger position_mismatch"
+    print("✓ Test 8 passed: genuine spoof detected")
+
+
 if __name__ == "__main__":
     try:
         test_normal_aircraft()
@@ -497,6 +620,8 @@ if __name__ == "__main__":
         test_anomaly_threshold()
         test_acceleration_anomaly()
         test_direction_change_anomaly()
+        test_position_mismatch_no_false_positive_on_slow_aircraft()
+        test_position_mismatch_true_positive_on_frozen_adsb()
         print("\n" + "=" * 60)
         print("SUCCESS: All anomaly detection tests passed! ✓")
         print("=" * 60)
