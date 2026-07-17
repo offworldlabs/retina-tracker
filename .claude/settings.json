@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "offworld": {
+      "source": {
+        "source": "github",
+        "repo": "offworldlabs/claude-shared"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "core@offworld": true
+  }
+}
