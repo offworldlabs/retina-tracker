@@ -159,3 +159,10 @@ Configuration is managed via YAML files and environment variables:
 - **Test coverage**: All business logic must have tests
 - **Linting**: Must pass Ruff checks (E, F, W rules)
 - **Formatting**: Must pass Ruff formatting
+
+## Org-Wide Context
+
+For shared architecture, cross-service contracts, decisions, and runbooks, see
+the Offworld Labs shared docs: https://github.com/offworldlabs/claude-shared/tree/main/docs
+
+Shared Claude rules live in `.claude/rules/` and are enforced on every change.
