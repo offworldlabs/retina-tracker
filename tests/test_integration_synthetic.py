@@ -69,12 +69,9 @@ def calculate_bistatic_range(aircraft_lat, aircraft_lon, aircraft_alt_ft):
     """Calculate bistatic range (TX -> aircraft -> RX) in km."""
     aircraft_alt_m = aircraft_alt_ft * 0.3048
 
-    tx_to_aircraft = haversine_distance(
-        TX_LAT, TX_LON, TX_ALT, aircraft_lat, aircraft_lon, aircraft_alt_m
-    )
+    tx_to_aircraft = haversine_distance(TX_LAT, TX_LON, TX_ALT, aircraft_lat, aircraft_lon, aircraft_alt_m)
     aircraft_to_rx = haversine_distance(
-        aircraft_lat, aircraft_lon, aircraft_alt_m,
-        RX_CONFIG["lat"], RX_CONFIG["lon"], RX_CONFIG["alt"]
+        aircraft_lat, aircraft_lon, aircraft_alt_m, RX_CONFIG["lat"], RX_CONFIG["lon"], RX_CONFIG["alt"]
     )
 
     return (tx_to_aircraft + aircraft_to_rx) / 1000.0
@@ -123,14 +120,16 @@ def generate_detection_frame(aircraft_list, timestamp_ms, include_adsb=True):
         snrs.append(15.0 + (hash(icao_hex) % 10))
 
         if has_adsb:
-            adsb_list.append({
-                "hex": icao_hex,
-                "lat": lat,
-                "lon": lon,
-                "alt_baro": alt_ft,
-                "gs": gs_knots,
-                "track": track_deg,
-            })
+            adsb_list.append(
+                {
+                    "hex": icao_hex,
+                    "lat": lat,
+                    "lon": lon,
+                    "alt_baro": alt_ft,
+                    "gs": gs_knots,
+                    "track": track_deg,
+                }
+            )
         else:
             adsb_list.append(None)
 
@@ -196,12 +195,14 @@ class TestIntegrationSyntheticAnomalies:
             angular_speed=0.01,
         )
 
-        aircraft = [{
-            "motion_pattern": motion,
-            "altitude_ft": 30000,
-            "hex": "NORMAL1",
-            "has_adsb": True,
-        }]
+        aircraft = [
+            {
+                "motion_pattern": motion,
+                "altitude_ft": 30000,
+                "hex": "NORMAL1",
+                "has_adsb": True,
+            }
+        ]
 
         tracker = Tracker(config=config)
 
@@ -232,8 +233,10 @@ class TestIntegrationSyntheticAnomalies:
 
         for track in confirmed:
             velocity_ms = track.max_velocity_ms
-            print(f"  Track {track.id or 'unnamed'}: max_velocity={velocity_ms:.1f} m/s, "
-                  f"is_anomalous={track.is_anomalous}")
+            print(
+                f"  Track {track.id or 'unnamed'}: max_velocity={velocity_ms:.1f} m/s, "
+                f"is_anomalous={track.is_anomalous}"
+            )
             assert not track.is_anomalous, "Normal aircraft should NOT be flagged as anomalous"
             assert velocity_ms < MACH_1_MS, "Normal aircraft velocity should be < Mach 1"
 
@@ -258,12 +261,14 @@ class TestIntegrationSyntheticAnomalies:
             start_time=start_time,
         )
 
-        aircraft = [{
-            "motion_pattern": motion,
-            "altitude_ft": 50000,
-            "hex": "SUPER01",
-            "has_adsb": False,
-        }]
+        aircraft = [
+            {
+                "motion_pattern": motion,
+                "altitude_ft": 50000,
+                "hex": "SUPER01",
+                "has_adsb": False,
+            }
+        ]
 
         tracker = Tracker(config=config)
 
@@ -288,15 +293,18 @@ class TestIntegrationSyntheticAnomalies:
         found_anomalous = False
         for track in confirmed:
             velocity_ms = track.max_velocity_ms
-            print(f"  Track {track.id or 'unnamed'}: max_velocity={velocity_ms:.1f} m/s "
-                  f"({velocity_ms/MACH_1_MS:.1f} Mach), is_anomalous={track.is_anomalous}")
+            print(
+                f"  Track {track.id or 'unnamed'}: max_velocity={velocity_ms:.1f} m/s "
+                f"({velocity_ms / MACH_1_MS:.1f} Mach), is_anomalous={track.is_anomalous}"
+            )
 
             if track.is_anomalous:
                 found_anomalous = True
                 assert velocity_ms > MACH_1_MS, "Anomalous track should have velocity > Mach 1"
 
-        assert found_anomalous or len(confirmed) == 0, \
+        assert found_anomalous or len(confirmed) == 0, (
             "Supersonic aircraft should be flagged as anomalous (or no track formed)"
+        )
 
         if found_anomalous:
             print("PASSED: Supersonic aircraft correctly flagged as anomalous")
@@ -375,8 +383,10 @@ class TestIntegrationSyntheticAnomalies:
 
         for track in confirmed:
             velocity_ms = track.max_velocity_ms
-            print(f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s, "
-                  f"anomalous={track.is_anomalous}, adsb_hex={track.adsb_hex}")
+            print(
+                f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s, "
+                f"anomalous={track.is_anomalous}, adsb_hex={track.adsb_hex}"
+            )
 
         assert len(normal_tracks) >= 1, "Should have at least 1 normal track"
         print("PASSED: Mixed fleet correctly processed")
@@ -401,12 +411,14 @@ class TestIntegrationSyntheticAnomalies:
             start_time=start_time,
         )
 
-        aircraft = [{
-            "motion_pattern": motion,
-            "altitude_ft": 25000,
-            "hex": "CHANGE1",
-            "has_adsb": True,
-        }]
+        aircraft = [
+            {
+                "motion_pattern": motion,
+                "altitude_ft": 25000,
+                "hex": "CHANGE1",
+                "has_adsb": True,
+            }
+        ]
 
         tracker = Tracker(config=config)
 
@@ -432,8 +444,7 @@ class TestIntegrationSyntheticAnomalies:
 
         for track in confirmed:
             velocity_ms = track.max_velocity_ms
-            print(f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s, "
-                  f"anomalous={track.is_anomalous}")
+            print(f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s, anomalous={track.is_anomalous}")
 
         print("PASSED: Instant direction change aircraft processed")
 
@@ -463,12 +474,14 @@ class TestIntegrationSyntheticAnomalies:
             start_time=start_time,
         )
 
-        aircraft = [{
-            "motion_pattern": motion,
-            "altitude_ft": 20000,
-            "hex": "ACCEL01",
-            "has_adsb": True,
-        }]
+        aircraft = [
+            {
+                "motion_pattern": motion,
+                "altitude_ft": 20000,
+                "hex": "ACCEL01",
+                "has_adsb": True,
+            }
+        ]
 
         tracker = Tracker(config=config)
 
@@ -494,8 +507,7 @@ class TestIntegrationSyntheticAnomalies:
 
         for track in confirmed:
             velocity_ms = track.max_velocity_ms
-            print(f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s, "
-                  f"anomalous={track.is_anomalous}")
+            print(f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s, anomalous={track.is_anomalous}")
 
         print("PASSED: Instant acceleration aircraft processed")
 
@@ -519,12 +531,14 @@ class TestIntegrationSyntheticAnomalies:
             start_time=start_time,
         )
 
-        aircraft = [{
-            "motion_pattern": motion,
-            "altitude_ft": 55000,
-            "hex": "STEALTH",
-            "has_adsb": False,
-        }]
+        aircraft = [
+            {
+                "motion_pattern": motion,
+                "altitude_ft": 55000,
+                "hex": "STEALTH",
+                "has_adsb": False,
+            }
+        ]
 
         tracker = Tracker(config=config)
 
@@ -548,12 +562,13 @@ class TestIntegrationSyntheticAnomalies:
 
         for track in confirmed:
             velocity_ms = track.max_velocity_ms
-            print(f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s "
-                  f"({velocity_ms/MACH_1_MS:.1f} Mach), anomalous={track.is_anomalous}")
+            print(
+                f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s "
+                f"({velocity_ms / MACH_1_MS:.1f} Mach), anomalous={track.is_anomalous}"
+            )
 
             if velocity_ms > MACH_1_MS:
-                assert track.is_anomalous, \
-                    "Supersonic aircraft WITHOUT ADS-B MUST be flagged as anomalous"
+                assert track.is_anomalous, "Supersonic aircraft WITHOUT ADS-B MUST be flagged as anomalous"
 
         print("PASSED: Supersonic without ADS-B handled correctly")
 
@@ -577,12 +592,14 @@ class TestIntegrationSyntheticAnomalies:
             start_time=start_time,
         )
 
-        aircraft = [{
-            "motion_pattern": motion,
-            "altitude_ft": 50000,
-            "hex": "COMBO12",
-            "has_adsb": False,
-        }]
+        aircraft = [
+            {
+                "motion_pattern": motion,
+                "altitude_ft": 50000,
+                "hex": "COMBO12",
+                "has_adsb": False,
+            }
+        ]
 
         tracker = Tracker(config=config)
 
@@ -606,12 +623,13 @@ class TestIntegrationSyntheticAnomalies:
 
         for track in confirmed:
             velocity_ms = track.max_velocity_ms
-            print(f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s "
-                  f"({velocity_ms/MACH_1_MS:.1f} Mach), anomalous={track.is_anomalous}")
+            print(
+                f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s "
+                f"({velocity_ms / MACH_1_MS:.1f} Mach), anomalous={track.is_anomalous}"
+            )
 
             if velocity_ms > MACH_1_MS:
-                assert track.is_anomalous, \
-                    "Supersonic + direction change should be flagged as anomalous"
+                assert track.is_anomalous, "Supersonic + direction change should be flagged as anomalous"
 
         print("PASSED: Supersonic + direction change aircraft handled correctly")
 
@@ -641,12 +659,14 @@ class TestIntegrationSyntheticAnomalies:
             start_time=start_time,
         )
 
-        aircraft = [{
-            "motion_pattern": motion,
-            "altitude_ft": 55000,
-            "hex": "COMBO13",
-            "has_adsb": False,
-        }]
+        aircraft = [
+            {
+                "motion_pattern": motion,
+                "altitude_ft": 55000,
+                "hex": "COMBO13",
+                "has_adsb": False,
+            }
+        ]
 
         tracker = Tracker(config=config)
 
@@ -670,12 +690,13 @@ class TestIntegrationSyntheticAnomalies:
 
         for track in confirmed:
             velocity_ms = track.max_velocity_ms
-            print(f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s "
-                  f"({velocity_ms/MACH_1_MS:.1f} Mach), anomalous={track.is_anomalous}")
+            print(
+                f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s "
+                f"({velocity_ms / MACH_1_MS:.1f} Mach), anomalous={track.is_anomalous}"
+            )
 
             if velocity_ms > MACH_1_MS:
-                assert track.is_anomalous, \
-                    "Supersonic + acceleration should be flagged as anomalous"
+                assert track.is_anomalous, "Supersonic + acceleration should be flagged as anomalous"
 
         print("PASSED: Supersonic + acceleration aircraft handled correctly")
 
@@ -713,19 +734,21 @@ class TestIntegrationSyntheticAnomalies:
 
             fake_gs_knots = 350
 
-            detections = [{
-                "delay": delay_km,
-                "doppler": doppler_hz,
-                "snr": 18.0,
-                "adsb": {
-                    "hex": "SPOOF01",
-                    "lat": lat,
-                    "lon": lon,
-                    "alt_baro": 50000,
-                    "gs": fake_gs_knots,
-                    "track": track_deg,
-                },
-            }]
+            detections = [
+                {
+                    "delay": delay_km,
+                    "doppler": doppler_hz,
+                    "snr": 18.0,
+                    "adsb": {
+                        "hex": "SPOOF01",
+                        "lat": lat,
+                        "lon": lon,
+                        "alt_baro": 50000,
+                        "gs": fake_gs_knots,
+                        "track": track_deg,
+                    },
+                }
+            ]
 
             tracker.process_frame(detections, timestamp_ms)
 
@@ -734,12 +757,13 @@ class TestIntegrationSyntheticAnomalies:
 
         for track in confirmed:
             velocity_ms = track.max_velocity_ms
-            print(f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s "
-                  f"({velocity_ms/MACH_1_MS:.1f} Mach), anomalous={track.is_anomalous}")
+            print(
+                f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s "
+                f"({velocity_ms / MACH_1_MS:.1f} Mach), anomalous={track.is_anomalous}"
+            )
             print(f"    ADS-B reported: 350 knots (~180 m/s), Actual Doppler implies: {velocity_ms:.1f} m/s")
 
-            assert track.is_anomalous, \
-                "Spoofed ADS-B (subsonic) with supersonic Doppler MUST be flagged as anomalous"
+            assert track.is_anomalous, "Spoofed ADS-B (subsonic) with supersonic Doppler MUST be flagged as anomalous"
 
         print("PASSED: Inaccurate/spoofed ADS-B correctly detected as anomalous")
 
@@ -758,9 +782,7 @@ class TestIntegrationSyntheticAnomalies:
         start_time = time.time()
 
         normal_motion = CircularMotion(TX_LAT, TX_LON, 0.05, 0.01)
-        supersonic_motion = SupersonicLinearMotion(
-            TX_LAT + 0.15, TX_LON + 0.15, 2.5, 135, start_time
-        )
+        supersonic_motion = SupersonicLinearMotion(TX_LAT + 0.15, TX_LON + 0.15, 2.5, 135, start_time)
 
         tracker = Tracker(config=config)
 
@@ -779,19 +801,21 @@ class TestIntegrationSyntheticAnomalies:
             doppler1 += random.gauss(0, 10)
             snr1 = random.uniform(10, 25)
 
-            detections.append({
-                "delay": delay1,
-                "doppler": doppler1,
-                "snr": snr1,
-                "adsb": {
-                    "hex": "NOISY01",
-                    "lat": lat1,
-                    "lon": lon1,
-                    "alt_baro": 30000,
-                    "gs": gs1,
-                    "track": normal_motion.get_heading(current_time),
-                },
-            })
+            detections.append(
+                {
+                    "delay": delay1,
+                    "doppler": doppler1,
+                    "snr": snr1,
+                    "adsb": {
+                        "hex": "NOISY01",
+                        "lat": lat1,
+                        "lon": lon1,
+                        "alt_baro": 30000,
+                        "gs": gs1,
+                        "track": normal_motion.get_heading(current_time),
+                    },
+                }
+            )
 
             lat2, lon2 = supersonic_motion.get_position(current_time)
             gs2 = supersonic_motion.get_velocity(current_time)
@@ -802,18 +826,22 @@ class TestIntegrationSyntheticAnomalies:
             doppler2 += random.gauss(0, 20)
             snr2 = random.uniform(8, 20)
 
-            detections.append({
-                "delay": delay2,
-                "doppler": doppler2,
-                "snr": snr2,
-            })
+            detections.append(
+                {
+                    "delay": delay2,
+                    "doppler": doppler2,
+                    "snr": snr2,
+                }
+            )
 
             if random.random() < 0.3:
-                detections.append({
-                    "delay": random.uniform(20, 150),
-                    "doppler": random.uniform(-500, 500),
-                    "snr": random.uniform(7, 12),
-                })
+                detections.append(
+                    {
+                        "delay": random.uniform(20, 150),
+                        "doppler": random.uniform(-500, 500),
+                        "snr": random.uniform(7, 12),
+                    }
+                )
 
             tracker.process_frame(detections, timestamp_ms)
 
@@ -825,8 +853,10 @@ class TestIntegrationSyntheticAnomalies:
         for track in confirmed:
             velocity_ms = track.max_velocity_ms
             status = "ANOMALOUS" if track.is_anomalous else "normal"
-            print(f"  [{status}] Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s, "
-                  f"assoc={track.n_associated}")
+            print(
+                f"  [{status}] Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s, "
+                f"assoc={track.n_associated}"
+            )
 
             if track.is_anomalous:
                 anomalous_count += 1
@@ -868,19 +898,21 @@ class TestIntegrationSyntheticAnomalies:
             delay = calculate_bistatic_range(lat, lon, 30000)
             doppler = calculate_doppler(gs)
 
-            detections = [{
-                "delay": delay,
-                "doppler": doppler,
-                "snr": 15.0,
-                "adsb": {
-                    "hex": "GAPPY01",
-                    "lat": lat,
-                    "lon": lon,
-                    "alt_baro": 30000,
-                    "gs": gs,
-                    "track": motion.get_heading(current_time),
-                },
-            }]
+            detections = [
+                {
+                    "delay": delay,
+                    "doppler": doppler,
+                    "snr": 15.0,
+                    "adsb": {
+                        "hex": "GAPPY01",
+                        "lat": lat,
+                        "lon": lon,
+                        "alt_baro": 30000,
+                        "gs": gs,
+                        "track": motion.get_heading(current_time),
+                    },
+                }
+            ]
 
             tracker.process_frame(detections, timestamp_ms)
 
@@ -890,9 +922,11 @@ class TestIntegrationSyntheticAnomalies:
         for track in confirmed:
             velocity_ms = track.max_velocity_ms
             continuity = track.n_associated / max(track.n_frames, 1)
-            print(f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s, "
-                  f"assoc={track.n_associated}, frames={track.n_frames}, "
-                  f"continuity={continuity:.1%}")
+            print(
+                f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s, "
+                f"assoc={track.n_associated}, frames={track.n_frames}, "
+                f"continuity={continuity:.1%}"
+            )
 
         assert len(confirmed) >= 1, "Should maintain track despite missed detections"
         print("PASSED: Track maintained through missed detections")
@@ -910,9 +944,7 @@ class TestIntegrationSyntheticAnomalies:
         random.seed(42)
         start_time = time.time()
 
-        motion = SupersonicLinearMotion(
-            TX_LAT, TX_LON + 0.1, 2.0, 90, start_time
-        )
+        motion = SupersonicLinearMotion(TX_LAT, TX_LON + 0.1, 2.0, 90, start_time)
 
         tracker = Tracker(config=config)
         adsb_probability = 0.3
@@ -958,12 +990,13 @@ class TestIntegrationSyntheticAnomalies:
 
         for track in confirmed:
             velocity_ms = track.max_velocity_ms
-            print(f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s "
-                  f"({velocity_ms/MACH_1_MS:.1f} Mach), anomalous={track.is_anomalous}, "
-                  f"adsb_hex={track.adsb_hex}")
+            print(
+                f"  Track {track.id or 'unnamed'}: velocity={velocity_ms:.1f} m/s "
+                f"({velocity_ms / MACH_1_MS:.1f} Mach), anomalous={track.is_anomalous}, "
+                f"adsb_hex={track.adsb_hex}"
+            )
 
-            assert track.is_anomalous, \
-                "Supersonic aircraft with intermittent ADS-B should still be flagged"
+            assert track.is_anomalous, "Supersonic aircraft with intermittent ADS-B should still be flagged"
 
         print("PASSED: Intermittent ADS-B handled correctly - anomaly still detected")
 
@@ -984,12 +1017,8 @@ class TestIntegrationSyntheticAnomalies:
 
         normal1 = CircularMotion(TX_LAT, TX_LON, 0.05, 0.01)
         normal2 = CircularMotion(TX_LAT + 0.1, TX_LON - 0.1, 0.03, -0.015)
-        supersonic = SupersonicLinearMotion(
-            TX_LAT - 0.2, TX_LON + 0.2, 2.0, 120, start_time
-        )
-        direction_change = InstantDirectionChangeMotion(
-            TX_LAT + 0.15, TX_LON + 0.15, 450, 45, 4.0, start_time
-        )
+        supersonic = SupersonicLinearMotion(TX_LAT - 0.2, TX_LON + 0.2, 2.0, 120, start_time)
+        direction_change = InstantDirectionChangeMotion(TX_LAT + 0.15, TX_LON + 0.15, 450, 45, 4.0, start_time)
 
         aircraft = [
             {"motion_pattern": normal1, "altitude_ft": 32000, "hex": "AAL123", "has_adsb": True},
@@ -1034,9 +1063,11 @@ class TestIntegrationSyntheticAnomalies:
         for track in confirmed:
             velocity_ms = track.max_velocity_ms
             status = "ANOMALOUS" if track.is_anomalous else "normal"
-            print(f"  [{status}] Track {track.id or 'unnamed'}: "
-                  f"velocity={velocity_ms:.1f} m/s, hex={track.adsb_hex}, "
-                  f"assoc={track.n_associated}")
+            print(
+                f"  [{status}] Track {track.id or 'unnamed'}: "
+                f"velocity={velocity_ms:.1f} m/s, hex={track.adsb_hex}, "
+                f"assoc={track.n_associated}"
+            )
 
         assert len(confirmed) >= 1, "Should have at least 1 confirmed track"
         print("\nPASSED: Full pipeline simulation completed successfully")
@@ -1143,6 +1174,7 @@ if __name__ == "__main__":
             print(f"\nERROR: {test_func.__name__}")
             print(f"  Exception: {e}")
             import traceback
+
             traceback.print_exc()
             failed += 1
 
