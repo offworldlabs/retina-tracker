@@ -15,9 +15,10 @@ DELAY_MAX = None
 DOPPLER_MIN = None
 DOPPLER_MAX = None
 
+
 def load_detections(filepath):
     """Load detection data from JSON file."""
-    with open(filepath, 'r') as f:
+    with open(filepath, "r") as f:
         content = f.read().strip()
         # Try to parse as array of objects first
         try:
@@ -29,11 +30,12 @@ def load_detections(filepath):
 
         # Fall back to line-by-line parsing
         detections = []
-        for line in content.split('\n'):
+        for line in content.split("\n"):
             line = line.strip()
             if line:
                 detections.append(json.loads(line))
     return detections
+
 
 def extract_data(detections):
     """Extract delay, doppler, and SNR arrays from all detections."""
@@ -42,9 +44,9 @@ def extract_data(detections):
     all_snrs = []
 
     for detection in detections:
-        delays = detection.get('delay', [])
-        dopplers = detection.get('doppler', [])
-        snrs = detection.get('snr', [])
+        delays = detection.get("delay", [])
+        dopplers = detection.get("doppler", [])
+        snrs = detection.get("snr", [])
 
         # Ensure all arrays have same length
         min_len = min(len(delays), len(dopplers), len(snrs))
@@ -54,6 +56,7 @@ def extract_data(detections):
         all_snrs.extend(snrs[:min_len])
 
     return np.array(all_delays), np.array(all_dopplers), np.array(all_snrs)
+
 
 def plot_detections(delays, dopplers, snrs):
     """Create scatter plot of detections."""
@@ -75,25 +78,25 @@ def plot_detections(delays, dopplers, snrs):
     snrs = snrs[mask]
 
     # Create scatter plot with SNR color mapping (blue to red)
-    scatter = ax.scatter(delays, dopplers, c=snrs,
-                        cmap='coolwarm', s=20, alpha=0.6)
+    scatter = ax.scatter(delays, dopplers, c=snrs, cmap="coolwarm", s=20, alpha=0.6)
 
     # Add colorbar
-    plt.colorbar(scatter, ax=ax, label='SNR (dB)')
+    plt.colorbar(scatter, ax=ax, label="SNR (dB)")
 
     # Labels and title
-    ax.set_xlabel('Delay', fontsize=12)
-    ax.set_ylabel('Doppler (Hz)', fontsize=12)
-    ax.set_title('Bistatic Radar Detection Map', fontsize=14, fontweight='bold')
+    ax.set_xlabel("Delay", fontsize=12)
+    ax.set_ylabel("Doppler (Hz)", fontsize=12)
+    ax.set_title("Bistatic Radar Detection Map", fontsize=14, fontweight="bold")
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     return fig
 
+
 def main():
-    parser = argparse.ArgumentParser(description='Plot bistatic radar detection data')
-    parser.add_argument('file', help='Path to .detection file')
-    parser.add_argument('-o', '--output', help='Save plot to file instead of displaying')
+    parser = argparse.ArgumentParser(description="Plot bistatic radar detection data")
+    parser.add_argument("file", help="Path to .detection file")
+    parser.add_argument("-o", "--output", help="Save plot to file instead of displaying")
 
     args = parser.parse_args()
 
@@ -110,10 +113,11 @@ def main():
 
     # Save or display
     if args.output:
-        fig.savefig(args.output, dpi=150, bbox_inches='tight')
+        fig.savefig(args.output, dpi=150, bbox_inches="tight")
         print(f"Plot saved to {args.output}")
     else:
         plt.show()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

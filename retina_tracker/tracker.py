@@ -1,6 +1,5 @@
 """Core Tracker class and GNN data association logic."""
 
-
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
@@ -48,7 +47,7 @@ class Tracker:
         associated_tracks = set()
         associated_detections = set()
 
-        _lazy_write = hasattr(self.event_writer, 'write_event_lazy') if self.event_writer else False
+        _lazy_write = hasattr(self.event_writer, "write_event_lazy") if self.event_writer else False
 
         for track_idx, det_idx in associations:
             track = self.tracks[track_idx]
@@ -177,19 +176,21 @@ class Tracker:
             if abs(det_S) < 1e-15:
                 continue
             inv_det = 1.0 / det_S
-            S_inv = np.array([
-                [S[1, 1] * inv_det, -S[0, 1] * inv_det],
-                [-S[1, 0] * inv_det, S[0, 0] * inv_det],
-            ])
+            S_inv = np.array(
+                [
+                    [S[1, 1] * inv_det, -S[0, 1] * inv_det],
+                    [-S[1, 0] * inv_det, S[0, 0] * inv_det],
+                ]
+            )
 
             gate = base_gate
             if track.state_status == TrackState.COASTING and track.n_missed > 0:
                 gate = base_gate * min(1.0 + 0.1 * track.n_missed, 1.2)
 
             # Vectorized Mahalanobis distance for all detections at once
-            innovations = det_z - z_pred                     # (n_dets, 2)
-            tmp = innovations @ S_inv                        # (n_dets, 2)
-            mahal = np.sum(tmp * innovations, axis=1)        # (n_dets,)
+            innovations = det_z - z_pred  # (n_dets, 2)
+            tmp = innovations @ S_inv  # (n_dets, 2)
+            mahal = np.sum(tmp * innovations, axis=1)  # (n_dets,)
 
             within_gate = mahal < gate
             if not np.any(within_gate):

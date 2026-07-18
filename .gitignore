@@ -31,5 +31,7 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Claude
-.claude/
+# Claude (track shared config; keep personal/local settings ignored)
+.claude/*
+!.claude/settings.json
+!.claude/rules/
