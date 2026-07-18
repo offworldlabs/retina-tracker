@@ -517,3 +517,5 @@ No commit.
 **Placeholder scan:** No TBD/TODO steps; every edit shows exact before/after content and exact commands with expected output. The only "TODO" mention is the grep in Task 4 Step 3 confirming placeholders are *gone*.
 
 **Type/name consistency:** Branch name `fix/claude-review-comments`, workflow filenames, and the `--allowedTools` string are used identically across tasks. Verification commands reference the real workflow file name `claude-code-review.yml` throughout.
+
+_Pilot (issue #5) landed on main; this PR verifies the Claude review comment posts._
