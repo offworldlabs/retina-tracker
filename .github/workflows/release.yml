@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'      # Release tags e.g. v0.1.0, v1.0.0
+      - 'v*.*.*-rc*'  # Release candidates e.g. v0.3.0-rc1
+      - 'dev'         # Development builds
+  workflow_dispatch:  # Manual trigger
+    inputs:
+      version:
+        description: "Release version (e.g., v1.0.0, dev)"
+        required: true
+
+jobs:
+  build-retina-tracker:
+    name: Build retina-tracker
+    uses: ./.github/workflows/build-retina-tracker.yml
+    with:
+      tag: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+      publish: "true"
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-retina-tracker]
+    # Only create releases for proper version tags (not dev or rc)
+    if: github.event_name == 'push' && startsWith(github.ref_name, 'v') && !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## Docker Image Published
+
+            Built, tested, and published to GitHub Container Registry:
+
+            - `ghcr.io/offworldlabs/retina-tracker:${{ github.ref_name }}`
+
+            Pull with:
+            ```bash
+            docker pull ghcr.io/offworldlabs/retina-tracker:${{ github.ref_name }}
+            ```
