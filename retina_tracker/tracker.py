@@ -29,6 +29,22 @@ class Tracker:
         self.event_writer = event_writer
         self.config = config if config else get_config()
 
+    def reset(self):
+        """Clear in-progress and completed-track state in place, as if
+        freshly constructed.
+
+        For a client (e.g. a passive-radar auto-calibration search) that
+        reuses this same long-running instance across a search geometry
+        change (a new tower means a new fc/tx position, so old delay/Doppler
+        tracks are no longer meaningful) — mirrors blah2's own
+        Tracker::reset() on an fc change. KalmanFilter holds no per-geometry
+        state, so it doesn't need recreating.
+        """
+        self.tracks = []
+        self.all_tracks = []
+        self.last_timestamp = None
+        self.frame_count = 0
+
     def process_frame(self, detections, timestamp):
         self.frame_count += 1
 

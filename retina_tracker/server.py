@@ -8,20 +8,6 @@ from .config import get_config
 from .tracker import Tracker
 
 
-def reset_tracker(tracker):
-    """Clear a Tracker's in-progress and completed-track state in place.
-
-    For a client (e.g. a passive-radar auto-calibration search) that reuses
-    this same long-running sidecar across a search geometry change (a new
-    tower means a new fc/tx position, so old delay/Doppler tracks are no
-    longer meaningful) — mirrors blah2's own Tracker::reset() on an fc
-    change, just for retina-tracker's independent tracker instance.
-    """
-    tracker.tracks = []
-    tracker.all_tracks = []
-    tracker.last_timestamp = None
-
-
 def process_streaming_frame(tracker, frame):
     """Convert blah2 streaming frame format to detections and process.
 
@@ -92,7 +78,7 @@ def run_tcp_server(host="0.0.0.0", port=3012, event_writer=None, detection_windo
                         # A real detection frame never carries a "type" key,
                         # so this can never misfire on genuine data.
                         if frame.get("type") == "RESET":
-                            reset_tracker(tracker)
+                            tracker.reset()
                             print("Tracker state reset", file=sys.stderr)
                             continue
                         process_streaming_frame(tracker, frame)

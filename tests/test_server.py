@@ -4,7 +4,7 @@ this same long-running tracker across a search geometry change.
 """
 
 from retina_tracker.config import get_config
-from retina_tracker.server import process_streaming_frame, reset_tracker
+from retina_tracker.server import process_streaming_frame
 from retina_tracker.tracker import Tracker
 
 
@@ -20,12 +20,14 @@ def test_reset_clears_in_progress_and_completed_tracks():
         process_streaming_frame(tracker, make_frame(i * 500, 10.0, 50.0))
 
     assert tracker.tracks or tracker.all_tracks or tracker.last_timestamp is not None
+    assert tracker.frame_count == 3
 
-    reset_tracker(tracker)
+    tracker.reset()
 
     assert tracker.tracks == []
     assert tracker.all_tracks == []
     assert tracker.last_timestamp is None
+    assert tracker.frame_count == 0
 
 
 def test_frame_after_reset_starts_fresh_not_associated_into_old_state():
@@ -34,7 +36,7 @@ def test_frame_after_reset_starts_fresh_not_associated_into_old_state():
     # A consistent target at one geometry...
     for i in range(3):
         process_streaming_frame(tracker, make_frame(i * 500, 10.0, 50.0))
-    reset_tracker(tracker)
+    tracker.reset()
 
     # ...then a detection at a totally different (delay, doppler) — as if
     # the search just switched to a different tower's geometry. Must start
