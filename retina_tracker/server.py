@@ -75,6 +75,12 @@ def run_tcp_server(host="0.0.0.0", port=3012, event_writer=None, detection_windo
                     line, buffer = buffer.split("\n", 1)
                     if line.strip():
                         frame = json.loads(line)
+                        # A real detection frame never carries a "type" key,
+                        # so this can never misfire on genuine data.
+                        if frame.get("type") == "RESET":
+                            tracker.reset()
+                            print("Tracker state reset", file=sys.stderr)
+                            continue
                         process_streaming_frame(tracker, frame)
 
             except (ConnectionResetError, BrokenPipeError):
