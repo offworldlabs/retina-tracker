@@ -127,7 +127,8 @@ def N_DELETE():
     return _get_param("tracker", "n_delete", 10)
 
 
-N_COAST = 3
+def N_COAST():
+    return _get_param("tracker", "n_coast", 3)
 
 
 def GATE_THRESHOLD():
