@@ -1,5 +1,7 @@
 """Core Tracker class and GNN data association logic."""
 
+from collections import deque
+
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
@@ -15,6 +17,9 @@ from .config import (
 from .kalman import KalmanFilter
 from .track import Track, TrackState
 
+MERGE_WINDOW_MS = 5000
+MAX_COMPLETED_TRACKS = 5000
+
 
 class Tracker:
     """Multi-target tracker using Kalman filtering and GNN data association."""
@@ -23,6 +28,7 @@ class Tracker:
         self.kf = KalmanFilter()
         self.tracks = []
         self.all_tracks = []
+        self.completed_tracks = deque(maxlen=MAX_COMPLETED_TRACKS)
         self.last_timestamp = None
         self.detection_window = detection_window
         self.frame_count = 0
@@ -42,6 +48,7 @@ class Tracker:
         """
         self.tracks = []
         self.all_tracks = []
+        self.completed_tracks.clear()
         self.last_timestamp = None
         self.frame_count = 0
 
@@ -153,13 +160,18 @@ class Tracker:
                 self.all_tracks.append(track)
         self.tracks = [t for t in self.tracks if not t.should_delete()]
 
-        # Prune all_tracks to the merge-window (5 s = 5000 ms) so _merge_tracks
-        # stays O(window²) instead of O(uptime²).  Entries older than the window
-        # can never be paired with new tracks, so they are safe to discard.
-        _MERGE_WINDOW_MS = 5000
+        # Entries older than the merge window can no longer be paired, so they
+        # leave the O(window²) merge working set — but they stay reportable via
+        # completed_tracks (bounded), which get_confirmed_tracks() also reads.
         if self.all_tracks:
-            cutoff = timestamp - _MERGE_WINDOW_MS
-            self.all_tracks = [t for t in self.all_tracks if t.death_timestamp >= cutoff]
+            cutoff = timestamp - MERGE_WINDOW_MS
+            retained = []
+            for track in self.all_tracks:
+                if track.death_timestamp >= cutoff:
+                    retained.append(track)
+                else:
+                    self.completed_tracks.append(track)
+            self.all_tracks = retained
 
         if len(self.all_tracks) > 1:
             self._merge_tracks()
@@ -319,7 +331,7 @@ class Tracker:
                 track_b = self.all_tracks[j]
 
                 time_gap = abs(track_a.death_timestamp - track_b.birth_timestamp)
-                if time_gap > 5000:
+                if time_gap > MERGE_WINDOW_MS:
                     continue
 
                 end_state_a = track_a.history["states"][-1]
@@ -361,6 +373,7 @@ class Tracker:
     def get_confirmed_tracks(self):
         confirmed = []
         confirmed.extend([t for t in self.tracks if t.state_status in (TrackState.ACTIVE, TrackState.COASTING)])
+        confirmed.extend(self.completed_tracks)
         confirmed.extend(self.all_tracks)
         return confirmed
 
