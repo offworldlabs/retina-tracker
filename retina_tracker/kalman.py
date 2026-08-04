@@ -63,6 +63,9 @@ class KalmanFilter:
         state_pred = F @ state
         cov_pred = F @ covariance @ F.T + Q
 
+        # Floor the delay at 0; zero the rate only once the floor engages.  A
+        # negative delay-rate with a still-positive delay is a legitimately
+        # approaching target and must NOT be clamped.
         if state_pred[0] < 0:
             state_pred[0] = 0.0
             if state_pred[1] < 0:
@@ -70,12 +73,19 @@ class KalmanFilter:
 
         return state_pred, cov_pred
 
+    @staticmethod
+    def measurement_noise_scale(snr):
+        """SNR → multiplicative scale on R.  One formula, used by both the
+        update and the association gate — they used to disagree: update scaled
+        R by SNR while gating used the raw R, so a high-SNR detection was
+        admitted through a looser covariance than the one that weighted it."""
+        if snr is None:
+            return 1.0
+        snr_linear = 10 ** (snr / 10)
+        return 1.0 / max(snr_linear / 10, 0.1)
+
     def update(self, state, covariance, measurement, snr=None):
-        R = self.R.copy()
-        if snr is not None:
-            snr_linear = 10 ** (snr / 10)
-            noise_scale = 1.0 / max(snr_linear / 10, 0.1)
-            R = R * noise_scale
+        R = self.R * self.measurement_noise_scale(snr)
 
         z_pred = self.H @ state
         innovation = measurement - z_pred
@@ -92,6 +102,14 @@ class KalmanFilter:
 
         return state_upd, cov_upd
 
-    def get_innovation_covariance(self, covariance):
-        S = self.H @ covariance @ self.H.T + self.R
+    def get_innovation_covariance(self, covariance, snr=None):
+        S = self.H @ covariance @ self.H.T + self.R * self.measurement_noise_scale(snr)
         return S
+
+    def get_innovation_base(self, covariance):
+        """H P Hᵀ — the state contribution to S, before measurement noise.
+
+        The gate adds per-detection SNR-scaled R on top of this, matching
+        update()'s noise model.
+        """
+        return self.H @ covariance @ self.H.T

@@ -675,8 +675,11 @@ class Track:
     def get_predicted_measurement(self):
         return self.kf.H @ self.state
 
-    def get_innovation_covariance(self):
-        return self.kf.get_innovation_covariance(self.covariance)
+    def get_innovation_covariance(self, snr=None):
+        return self.kf.get_innovation_covariance(self.covariance, snr)
+
+    def get_innovation_base(self):
+        return self.kf.get_innovation_base(self.covariance)
 
     def promote_if_ready(self):
         if self.state_status == TrackState.TENTATIVE:
