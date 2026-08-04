@@ -13,6 +13,7 @@ from .config import (
     MAX_NORMAL_ACCEL_MS2,
     SPEED_OF_LIGHT,
     M_THRESHOLD,
+    N_COAST,
     N_DELETE,
     N_WINDOW,
     _get_param,
@@ -611,7 +612,13 @@ class Track:
 
     def predict(self, dt):
         self.kf.dt = dt
-        self.state, self.covariance = self.kf.predict(self.state, self.covariance)
+        state_pred, cov_pred = self.kf.predict(self.state, self.covariance)
+        self.state = state_pred
+        # Freeze covariance growth once coasting exceeds N_COAST so the
+        # association gate stops inflating toward unrelated detections while
+        # the track dead-reckons on toward its N_DELETE deletion point.
+        if self.n_missed <= N_COAST():
+            self.covariance = cov_pred
 
     def update(self, detection, timestamp, frame=0):
         measurement = np.array([detection["delay"], detection["doppler"]])
