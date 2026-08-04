@@ -47,11 +47,12 @@ def load_config(config_path=None):
     default_config = {
         "mode": "node",
         "tracker": {
-            "m_threshold": 4,
+            "m_threshold": 3,
             "n_window": 6,
             "n_delete": 10,
-            "min_snr": 7.0,
-            "gate_threshold": 2.0,
+            "n_coast": 3,
+            "min_snr": 4.0,
+            "gate_threshold": 9.0,
             "detection_window": 20,
         },
         "process_noise": {"delay": 0.1, "doppler": 0.5},
@@ -116,7 +117,7 @@ def _get_param(section, key, default=None):
 
 # Track confirmation (M-of-N logic)
 def M_THRESHOLD():
-    return _get_param("tracker", "m_threshold", 4)
+    return _get_param("tracker", "m_threshold", 3)
 
 
 def N_WINDOW():
@@ -132,11 +133,11 @@ def N_COAST():
 
 
 def GATE_THRESHOLD():
-    return _get_param("tracker", "gate_threshold", 2.0)
+    return _get_param("tracker", "gate_threshold", 9.0)
 
 
 def MIN_SNR():
-    return _get_param("tracker", "min_snr", 7.0)
+    return _get_param("tracker", "min_snr", 4.0)
 
 
 def PROCESS_NOISE_DELAY():
