@@ -83,6 +83,9 @@ class Track:
         self.max_velocity_ms = 0.0
         self.anomaly_detections = []
         self.anomaly_types = set()
+        # Pre-latch evidence scores behind the M-of-N anomaly flags — see
+        # the _ANOMALY_STREAMS table.  stream name -> current score.
+        self._anomaly_scores = {}
         self.last_velocity_ms = None
         self.last_heading_deg = None
         self._heading_changes = []
@@ -143,6 +146,74 @@ class Track:
 
         return True
 
+    # ── M-of-N anomaly flags ─────────────────────────────────────────────
+    # Flags used to be set by a single observation: one clutter Doppler
+    # spike mis-associated into a track branded it supersonic for life.
+    # Each check now feeds a per-stream evidence score — +1 per anomalous
+    # observation, -1 per affirmatively-clean observation (floor 0) — and
+    # the flag LATCHES permanently once a stream reaches its threshold.
+    # An anomalous object stays anomalous (it does not stop being a
+    # supersonic contact because it slowed down); the score exists only so
+    # that a lone noisy datapoint, or scattered outliers diluted by clean
+    # frames, can never latch the flag.
+    #
+    # Per-frame streams latch at ANOMALY_RAISE_N net observations.
+    # Discrete streams (identity_swap, long_hover) latch on their first
+    # occurrence: their checks already debounce over multiple frames
+    # (2 consecutive mismatched hexes; 15 min of frozen position), so one
+    # occurrence is never a single noisy datapoint — and a genuine
+    # identity swap happens exactly once.
+    #
+    # Observations with no evidence either way (no ADS-B on the frame,
+    # dt outside the comparison window) leave the score untouched.
+    ANOMALY_RAISE_N = 3
+
+    # stream -> (reported type, latch threshold).  "supersonic" is fed by
+    # two streams (Doppler-implied and ADS-B-reported speed) so a spoofer
+    # whose ADS-B claims subsonic cannot vote down its own Doppler
+    # evidence.
+    _ANOMALY_STREAMS = {
+        "supersonic_doppler": ("supersonic", ANOMALY_RAISE_N),
+        "supersonic_velocity": ("supersonic", ANOMALY_RAISE_N),
+        "sustained_orbit": ("sustained_orbit", ANOMALY_RAISE_N),
+        "position_mismatch": ("position_mismatch", ANOMALY_RAISE_N),
+        "instant_acceleration": ("instant_acceleration", ANOMALY_RAISE_N),
+        "instant_direction_change": ("instant_direction_change", ANOMALY_RAISE_N),
+        "altitude_jump": ("altitude_jump", ANOMALY_RAISE_N),
+        "anomalous_acceleration": ("anomalous_acceleration", ANOMALY_RAISE_N),
+        "identity_swap": ("identity_swap", 1),
+        "long_hover": ("long_hover", 1),
+    }
+
+    def _observe_anomaly(self, stream, timestamp=None, event=None):
+        """Record one anomalous observation on *stream*; returns True.
+
+        *event*, when given, is appended to anomaly_detections with the
+        stream's reported type and *timestamp* — every occurrence is
+        logged, whether or not the flag has latched.
+        """
+        atype, thr = self._ANOMALY_STREAMS[stream]
+        if event is not None:
+            self.anomaly_detections.append({"timestamp": timestamp, "type": atype, **event})
+        if atype in self.anomaly_types:
+            return True  # already latched
+        score = self._anomaly_scores.get(stream, 0) + 1
+        self._anomaly_scores[stream] = score
+        if score >= thr:
+            self.anomaly_types.add(atype)
+            self.is_anomalous = True
+        return True
+
+    def _observe_clean(self, stream):
+        """Record one affirmatively-clean observation on *stream*.
+
+        Dilutes pre-latch evidence so scattered outliers never accumulate
+        to the threshold.  Has no effect once the flag has latched.
+        """
+        score = self._anomaly_scores.get(stream, 0)
+        if score:
+            self._anomaly_scores[stream] = score - 1
+
     def _check_doppler_anomaly(self, detection):
         doppler = abs(detection["doppler"])
         threshold = get_mach1_doppler_threshold()
@@ -154,6 +225,7 @@ class Track:
             self.max_velocity_ms = velocity_ms
 
         if doppler < threshold:
+            self._observe_clean("supersonic_doppler")
             return False
 
         if detection.get("adsb"):
@@ -161,11 +233,12 @@ class Track:
             if adsb_gs is not None and isinstance(adsb_gs, (int, float)) and not np.isnan(adsb_gs):
                 adsb_velocity_ms = adsb_gs * KNOTS_TO_MS
                 if adsb_velocity_ms >= MACH_1_MS:
+                    # Genuinely supersonic and honest about it — clean for
+                    # the unconfirmed-supersonic stream.
+                    self._observe_clean("supersonic_doppler")
                     return False
 
-        self.is_anomalous = True
-        self.anomaly_types.add("supersonic")
-        return True
+        return self._observe_anomaly("supersonic_doppler")
 
     def _check_velocity_anomaly(self, detection, timestamp):
         if not detection.get("adsb"):
@@ -183,19 +256,17 @@ class Track:
             self.max_velocity_ms = velocity_ms
 
         if velocity_ms > MACH_1_MS:
-            self.is_anomalous = True
-            self.anomaly_types.add("supersonic")
-            self.anomaly_detections.append(
+            return self._observe_anomaly(
+                "supersonic_velocity",
+                timestamp,
                 {
-                    "timestamp": timestamp,
-                    "type": "supersonic",
                     "velocity_ms": velocity_ms,
                     "velocity_knots": gs,
                     "mach": velocity_ms / MACH_1_MS,
-                }
+                },
             )
-            return True
 
+        self._observe_clean("supersonic_velocity")
         return False
 
     def _check_acceleration_anomaly(self, detection, timestamp):
@@ -218,19 +289,17 @@ class Track:
                 acceleration = dv / dt
 
                 if acceleration > MAX_NORMAL_ACCEL_MS2:
-                    self.is_anomalous = True
-                    self.anomaly_types.add("instant_acceleration")
-                    self.anomaly_detections.append(
+                    self.last_velocity_ms = velocity_ms
+                    return self._observe_anomaly(
+                        "instant_acceleration",
+                        timestamp,
                         {
-                            "timestamp": timestamp,
-                            "type": "instant_acceleration",
                             "acceleration_ms2": acceleration,
                             "velocity_change_ms": dv,
                             "time_delta_sec": dt,
-                        }
+                        },
                     )
-                    self.last_velocity_ms = velocity_ms
-                    return True
+                self._observe_clean("instant_acceleration")
 
         self.last_velocity_ms = velocity_ms
         return False
@@ -256,19 +325,17 @@ class Track:
                 turn_rate = dheading / dt
 
                 if turn_rate > MAX_DIRECTION_CHANGE_DEG_PER_SEC:
-                    self.is_anomalous = True
-                    self.anomaly_types.add("instant_direction_change")
-                    self.anomaly_detections.append(
+                    self.last_heading_deg = track
+                    return self._observe_anomaly(
+                        "instant_direction_change",
+                        timestamp,
                         {
-                            "timestamp": timestamp,
-                            "type": "instant_direction_change",
                             "turn_rate_deg_per_sec": turn_rate,
                             "heading_change_deg": dheading,
                             "time_delta_sec": dt,
-                        }
+                        },
                     )
-                    self.last_heading_deg = track
-                    return True
+                self._observe_clean("instant_direction_change")
 
         self.last_heading_deg = track
         return False
@@ -290,17 +357,15 @@ class Track:
             if len(self._heading_changes) >= ORBIT_HEADING_WINDOW:
                 total = sum(self._heading_changes)
                 if total >= ORBIT_MIN_CUMULATIVE_DEG:
-                    self.is_anomalous = True
-                    self.anomaly_types.add("sustained_orbit")
-                    self.anomaly_detections.append(
+                    return self._observe_anomaly(
+                        "sustained_orbit",
+                        timestamp,
                         {
-                            "timestamp": timestamp,
-                            "type": "sustained_orbit",
                             "cumulative_heading_change_deg": total,
                             "window_frames": len(self._heading_changes),
-                        }
+                        },
                     )
-                    return True
+                self._observe_clean("sustained_orbit")
         return False
 
     def _check_position_mismatch_anomaly(self, detection, timestamp):
@@ -346,23 +411,21 @@ class Track:
                     self._adsb_frozen_count += 1
                 else:
                     self._adsb_frozen_count = 0
+                    self._observe_clean("position_mismatch")
             else:
                 self._adsb_frozen_count = 0
             if self._adsb_frozen_count >= SPOOF_MIN_FROZEN_FRAMES:
-                self.is_anomalous = True
-                self.anomaly_types.add("position_mismatch")
-                self.anomaly_detections.append(
+                self._last_adsb_lat = lat
+                self._last_adsb_lon = lon
+                return self._observe_anomaly(
+                    "position_mismatch",
+                    timestamp,
                     {
-                        "timestamp": timestamp,
-                        "type": "position_mismatch",
                         "frozen_frames": self._adsb_frozen_count,
                         "reported_gs_kts": gs,
                         "position_delta_deg": max(dlat, dlon),
-                    }
+                    },
                 )
-                self._last_adsb_lat = lat
-                self._last_adsb_lon = lon
-                return True
         self._last_adsb_lat = lat
         self._last_adsb_lon = lon
         return False
@@ -391,6 +454,7 @@ class Track:
             # Hex matches — the track is stable; reset debounce
             self._identity_mismatch_count = 0
             self._pending_identity_hex = None
+            self._observe_clean("identity_swap")
             return False
         # Hex mismatch: advance debounce only when the same new hex repeats
         if self._pending_identity_hex == new_hex_lower:
@@ -400,21 +464,15 @@ class Track:
             self._pending_identity_hex = new_hex_lower
         if self._identity_mismatch_count >= 2:
             old_hex = self.adsb_hex
-            self.is_anomalous = True
-            self.anomaly_types.add("identity_swap")
-            self.anomaly_detections.append(
-                {
-                    "timestamp": timestamp,
-                    "type": "identity_swap",
-                    "old_hex": old_hex,
-                    "new_hex": new_hex,
-                }
-            )
             # Advance adsb_hex so subsequent frames don't re-trigger
             self.adsb_hex = new_hex
             self._identity_mismatch_count = 0
             self._pending_identity_hex = None
-            return True
+            return self._observe_anomaly(
+                "identity_swap",
+                timestamp,
+                {"old_hex": old_hex, "new_hex": new_hex},
+            )
         return False
 
     def _check_altitude_anomaly(self, detection, timestamp):
@@ -443,19 +501,18 @@ class Track:
         if self._last_alt_baro is not None:
             dalt = abs(alt_baro - self._last_alt_baro)
             if dalt > ALTITUDE_JUMP_THRESHOLD_FT:
-                self.is_anomalous = True
-                self.anomaly_types.add("altitude_jump")
-                self.anomaly_detections.append(
-                    {
-                        "timestamp": timestamp,
-                        "type": "altitude_jump",
-                        "altitude_change_ft": dalt,
-                        "old_alt_ft": self._last_alt_baro,
-                        "new_alt_ft": alt_baro,
-                    }
-                )
+                old_alt = self._last_alt_baro
                 self._last_alt_baro = alt_baro
-                return True
+                return self._observe_anomaly(
+                    "altitude_jump",
+                    timestamp,
+                    {
+                        "altitude_change_ft": dalt,
+                        "old_alt_ft": old_alt,
+                        "new_alt_ft": alt_baro,
+                    },
+                )
+            self._observe_clean("altitude_jump")
         self._last_alt_baro = alt_baro
         return False
 
@@ -486,19 +543,19 @@ class Track:
                 acceleration = dv / dt
 
                 if acceleration > ANOMALOUS_ACCEL_MS2:
-                    self.is_anomalous = True
-                    self.anomaly_types.add("anomalous_acceleration")
-                    self.anomaly_detections.append(
+                    self._observe_anomaly(
+                        "anomalous_acceleration",
+                        timestamp,
                         {
-                            "timestamp": timestamp,
-                            "type": "anomalous_acceleration",
                             "acceleration_ms2": acceleration,
                             "acceleration_g": round(acceleration / 9.81, 1),
                             "velocity_change_ms": dv,
                             "time_delta_sec": dt,
-                        }
+                        },
                     )
                     result = True
+                else:
+                    self._observe_clean("anomalous_acceleration")
 
         self._anomalous_accel_last_velocity_ms = velocity_ms
         return result
@@ -531,27 +588,25 @@ class Track:
         if dlat < LONG_HOVER_POSITION_EPSILON_DEG and dlon < LONG_HOVER_POSITION_EPSILON_DEG:
             duration_s = (timestamp - self._hover_start_ts) / 1000.0
             if duration_s >= LONG_HOVER_MIN_DURATION_S:
-                self.is_anomalous = True
-                self.anomaly_types.add("long_hover")
-                self.anomaly_detections.append(
-                    {
-                        "timestamp": timestamp,
-                        "type": "long_hover",
-                        "hover_duration_s": round(duration_s, 1),
-                        "anchor_lat": self._hover_anchor_lat,
-                        "anchor_lon": self._hover_anchor_lon,
-                    }
-                )
-                # Reset anchor to avoid repeated firing every frame
+                event = {
+                    "hover_duration_s": round(duration_s, 1),
+                    "anchor_lat": self._hover_anchor_lat,
+                    "anchor_lon": self._hover_anchor_lon,
+                }
+                # Reset anchor to avoid repeated firing every frame; a hover
+                # that continues re-raises after the next full duration, and
+                # the score does not decay in between (a hover in progress
+                # is not clean evidence).
                 self._hover_anchor_lat = lat
                 self._hover_anchor_lon = lon
                 self._hover_start_ts = timestamp
-                return True
+                return self._observe_anomaly("long_hover", timestamp, event)
         else:
             # Position moved — reset anchor
             self._hover_anchor_lat = lat
             self._hover_anchor_lon = lon
             self._hover_start_ts = timestamp
+            self._observe_clean("long_hover")
 
         return False
 
@@ -675,8 +730,11 @@ class Track:
     def get_predicted_measurement(self):
         return self.kf.H @ self.state
 
-    def get_innovation_covariance(self):
-        return self.kf.get_innovation_covariance(self.covariance)
+    def get_innovation_covariance(self, snr=None):
+        return self.kf.get_innovation_covariance(self.covariance, snr)
+
+    def get_innovation_base(self):
+        return self.kf.get_innovation_base(self.covariance)
 
     def promote_if_ready(self):
         if self.state_status == TrackState.TENTATIVE:

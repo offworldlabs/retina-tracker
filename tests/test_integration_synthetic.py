@@ -13,7 +13,6 @@ Issue #6: Make synthetic data streamer with anomalies (w and w/o ADS-B)
 """
 
 import math
-import sys
 import time
 
 from retina_tracker.track_detections import (
@@ -1073,113 +1072,5 @@ class TestIntegrationSyntheticAnomalies:
         print("\nPASSED: Full pipeline simulation completed successfully")
 
 
-def test_normal_aircraft_not_flagged():
-    test = TestIntegrationSyntheticAnomalies()
-    test.test_normal_aircraft_not_flagged()
-
-
-def test_supersonic_aircraft_detected():
-    test = TestIntegrationSyntheticAnomalies()
-    test.test_supersonic_aircraft_detected()
-
-
-def test_mixed_fleet_separation():
-    test = TestIntegrationSyntheticAnomalies()
-    test.test_mixed_fleet_separation()
-
-
-def test_instant_direction_change_aircraft():
-    test = TestIntegrationSyntheticAnomalies()
-    test.test_instant_direction_change_aircraft()
-
-
-def test_instant_acceleration_aircraft():
-    test = TestIntegrationSyntheticAnomalies()
-    test.test_instant_acceleration_aircraft()
-
-
-def test_supersonic_without_adsb():
-    test = TestIntegrationSyntheticAnomalies()
-    test.test_supersonic_without_adsb()
-
-
-def test_full_pipeline_simulation():
-    test = TestIntegrationSyntheticAnomalies()
-    test.test_full_pipeline_simulation()
-
-
-def test_supersonic_with_direction_changes():
-    test = TestIntegrationSyntheticAnomalies()
-    test.test_supersonic_with_direction_changes()
-
-
-def test_supersonic_with_acceleration():
-    test = TestIntegrationSyntheticAnomalies()
-    test.test_supersonic_with_acceleration()
-
-
-def test_inaccurate_adsb_spoofing():
-    test = TestIntegrationSyntheticAnomalies()
-    test.test_inaccurate_adsb_spoofing()
-
-
-def test_varying_snr_and_noise():
-    test = TestIntegrationSyntheticAnomalies()
-    test.test_varying_snr_and_noise()
-
-
-def test_missed_detections():
-    test = TestIntegrationSyntheticAnomalies()
-    test.test_missed_detections()
-
-
-def test_intermittent_adsb():
-    test = TestIntegrationSyntheticAnomalies()
-    test.test_intermittent_adsb()
-
-
-if __name__ == "__main__":
-    print("=" * 70)
-    print("INTEGRATION TEST: Synthetic ADS-B -> Retina Tracker Anomaly Detection")
-    print("=" * 70)
-
-    tests = [
-        test_normal_aircraft_not_flagged,
-        test_supersonic_aircraft_detected,
-        test_mixed_fleet_separation,
-        test_instant_direction_change_aircraft,
-        test_instant_acceleration_aircraft,
-        test_supersonic_without_adsb,
-        test_supersonic_with_direction_changes,
-        test_supersonic_with_acceleration,
-        test_inaccurate_adsb_spoofing,
-        test_varying_snr_and_noise,
-        test_missed_detections,
-        test_intermittent_adsb,
-        test_full_pipeline_simulation,
-    ]
-
-    passed = 0
-    failed = 0
-
-    for test_func in tests:
-        try:
-            test_func()
-            passed += 1
-        except AssertionError as e:
-            print(f"\nFAILED: {test_func.__name__}")
-            print(f"  Error: {e}")
-            failed += 1
-        except Exception as e:
-            print(f"\nERROR: {test_func.__name__}")
-            print(f"  Exception: {e}")
-            import traceback
-
-            traceback.print_exc()
-            failed += 1
-
-    print("\n" + "=" * 70)
-    print(f"SUMMARY: {passed} passed, {failed} failed")
-    print("=" * 70)
-
-    sys.exit(0 if failed == 0 else 1)
+# The 13 module-level wrappers that re-ran every class test a second time
+# per suite were deleted — pytest collects the class methods directly.

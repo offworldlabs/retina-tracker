@@ -191,34 +191,44 @@ class Tracker:
         det_z = np.array([[d["delay"], d["doppler"]] for d in detections])
         det_snr = np.array([d.get("snr", 10.0) for d in detections])
         snr_weights = 20.0 / np.maximum(det_snr, 5.0)
+        # Per-detection measurement-noise scale — the same model update()
+        # applies to R.  Gating used the unscaled R while update scaled it, so
+        # a high-SNR detection was admitted through a looser covariance than
+        # the one that then weighted it.
+        noise_scale = 1.0 / np.maximum(10.0 ** (det_snr / 10.0) / 10.0, 0.1)
 
         base_gate = GATE_THRESHOLD()
         adsb_priority = self.config.get("adsb", {}).get("priority")
 
         for i, track in enumerate(self.tracks):
             z_pred = track.get_predicted_measurement()
-            S = track.get_innovation_covariance()
-
-            # Analytical 2×2 inverse (avoids numpy.linalg.inv per-track overhead)
-            det_S = S[0, 0] * S[1, 1] - S[0, 1] * S[1, 0]
-            if abs(det_S) < 1e-15:
+            # S_j = H P Hᵀ + R·s_j, R diagonal — vectorised analytic 2×2
+            # inverse per detection (same trick as the old per-track inverse).
+            B = track.get_innovation_base()
+            r_delay = track.kf.R[0, 0]
+            r_doppler = track.kf.R[1, 1]
+            a = B[0, 0] + r_delay * noise_scale  # (n_dets,)
+            d = B[1, 1] + r_doppler * noise_scale  # (n_dets,)
+            b = B[0, 1]
+            c = B[1, 0]
+            det_S = a * d - b * c
+            valid = np.abs(det_S) > 1e-15
+            if not np.any(valid):
                 continue
-            inv_det = 1.0 / det_S
-            S_inv = np.array(
-                [
-                    [S[1, 1] * inv_det, -S[0, 1] * inv_det],
-                    [-S[1, 0] * inv_det, S[0, 0] * inv_det],
-                ]
-            )
 
             gate = base_gate
             if track.state_status == TrackState.COASTING and track.n_missed > 0:
                 gate = base_gate * min(1.0 + 0.1 * track.n_missed, 1.2)
 
-            # Vectorized Mahalanobis distance for all detections at once
+            # Vectorized Mahalanobis distance for all detections at once:
+            # nuᵀ S⁻¹ nu = (d·nu0² − (b+c)·nu0·nu1 + a·nu1²) / det(S)
             innovations = det_z - z_pred  # (n_dets, 2)
-            tmp = innovations @ S_inv  # (n_dets, 2)
-            mahal = np.sum(tmp * innovations, axis=1)  # (n_dets,)
+            nu0 = innovations[:, 0]
+            nu1 = innovations[:, 1]
+            mahal = np.full(len(detections), np.inf)
+            mahal[valid] = (
+                d[valid] * nu0[valid] ** 2 - (b + c) * nu0[valid] * nu1[valid] + a[valid] * nu1[valid] ** 2
+            ) / det_S[valid]
 
             within_gate = mahal < gate
             if not np.any(within_gate):
