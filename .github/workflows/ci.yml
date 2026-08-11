@@ -30,7 +30,7 @@ jobs:
         run: ruff format --check .
 
       - name: Dead code
-        run: tools/check-dead-code.sh
+        run: pre-commit run --all-files --show-diff-on-failure
 
       - name: Pytest
         run: pytest
