@@ -8,11 +8,11 @@ import os
 import sys
 
 from retina_tracker.track_detections import (
+    MACH_1_MS,
+    MAX_DIRECTION_CHANGE_DEG_PER_SEC,
+    MAX_NORMAL_ACCEL_MS2,
     process_detections,
     set_config,
-    MACH_1_MS,
-    MAX_NORMAL_ACCEL_MS2,
-    MAX_DIRECTION_CHANGE_DEG_PER_SEC,
 )
 
 

@@ -15,7 +15,8 @@ class TrackEventWriter:
             self.output = sys.stdout
             self._is_stdout = True
         else:
-            self.output = open(output_file, "w")
+            # Long-lived handle, released by close(); not a context-manager case.
+            self.output = open(output_file, "w")  # noqa: SIM115
             self._is_stdout = False
 
     def write_event(

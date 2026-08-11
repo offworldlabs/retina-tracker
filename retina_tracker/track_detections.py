@@ -11,22 +11,30 @@ New code should import directly from:
 # Re-export everything that was previously importable from this module.
 
 # Configuration
+# CLI / file processing
+from .cli import (
+    load_detections,
+    main,
+    process_detections,
+    save_tracks,
+    visualize_tracks,
+)
 from .config import (
+    GATE_THRESHOLD,
     KNOTS_TO_MS,
+    M_THRESHOLD,
     MACH_1_MS,
     MAX_DIRECTION_CHANGE_DEG_PER_SEC,
     MAX_NORMAL_ACCEL_MS2,
     MEASUREMENT_NOISE_DELAY,
     MEASUREMENT_NOISE_DOPPLER,
-    N_COAST,
-    SPEED_OF_LIGHT,
-    GATE_THRESHOLD,
-    M_THRESHOLD,
     MIN_SNR,
+    N_COAST,
     N_DELETE,
     N_WINDOW,
     PROCESS_NOISE_DELAY,
     PROCESS_NOISE_DOPPLER,
+    SPEED_OF_LIGHT,
     TRACKLET_MAX_DELAY_RESIDUAL,
     TRACKLET_MAX_DOPPLER_RESIDUAL,
     TRACKLET_MAX_TIME_SPAN,
@@ -40,26 +48,17 @@ from .config import (
 # Kalman filter
 from .kalman import KalmanFilter
 
-# Track
-from .track import Track, TrackState
-
-# Tracker
-from .tracker import Tracker
-
 # Output
 from .output import TrackEventWriter
 
 # Server / streaming
 from .server import process_streaming_frame, run_tcp_server
 
-# CLI / file processing
-from .cli import (
-    load_detections,
-    main,
-    process_detections,
-    save_tracks,
-    visualize_tracks,
-)
+# Track
+from .track import Track, TrackState
+
+# Tracker
+from .tracker import Tracker
 
 __all__ = [
     # Config

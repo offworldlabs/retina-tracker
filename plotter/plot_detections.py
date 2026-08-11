@@ -4,8 +4,9 @@ Plot bistatic radar detection data from blah2 software.
 Displays delay-Doppler map with SNR color coding.
 """
 
-import json
 import argparse
+import json
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -18,7 +19,7 @@ DOPPLER_MAX = None
 
 def load_detections(filepath):
     """Load detection data from JSON file."""
-    with open(filepath, "r") as f:
+    with open(filepath) as f:
         content = f.read().strip()
         # Try to parse as array of objects first
         try:

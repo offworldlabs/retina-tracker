@@ -19,7 +19,7 @@ from .tracker import Tracker
 
 def load_detections(filepath):
     """Load detection data from JSON or JSONL file."""
-    with open(filepath, "r") as f:
+    with open(filepath) as f:
         content = f.read().strip()
 
         try:
