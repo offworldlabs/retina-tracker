@@ -16,7 +16,7 @@ def load_blah2_config(blah2_config_path):
         Center frequency in Hz, or None if not found
     """
     try:
-        with open(blah2_config_path, "r") as f:
+        with open(blah2_config_path) as f:
             config = yaml.safe_load(f)
         fc = config.get("capture", {}).get("fc")
         if fc is not None:
@@ -81,7 +81,7 @@ def load_config(config_path=None):
                 break
 
     if config_path and os.path.exists(config_path):
-        with open(config_path, "r") as f:
+        with open(config_path) as f:
             loaded = yaml.safe_load(f)
             for key in default_config:
                 if key in loaded:

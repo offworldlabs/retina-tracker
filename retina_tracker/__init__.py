@@ -23,15 +23,15 @@ Usage:
 """
 
 from .config import (
-    load_config,
     get_config,
+    load_config,
     set_config,
 )
 from .kalman import KalmanFilter
-from .track import Track, TrackState
-from .tracker import Tracker
 from .output import TrackEventWriter
 from .server import process_streaming_frame
+from .track import Track, TrackState
+from .tracker import Tracker
 
 __all__ = [
     "Tracker",

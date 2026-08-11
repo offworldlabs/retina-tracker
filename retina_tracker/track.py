@@ -7,25 +7,25 @@ import numpy as np
 
 from . import geometry
 from .config import (
+    ALTITUDE_JUMP_THRESHOLD_FT,
+    ANOMALOUS_ACCEL_MS2,
     KNOTS_TO_MS,
+    LONG_HOVER_MIN_DURATION_S,
+    LONG_HOVER_POSITION_EPSILON_DEG,
+    M_THRESHOLD,
     MACH_1_MS,
     MAX_DIRECTION_CHANGE_DEG_PER_SEC,
     MAX_NORMAL_ACCEL_MS2,
-    SPEED_OF_LIGHT,
-    M_THRESHOLD,
     N_COAST,
     N_DELETE,
     N_WINDOW,
-    _get_param,
-    get_mach1_doppler_threshold,
     ORBIT_HEADING_WINDOW,
     ORBIT_MIN_CUMULATIVE_DEG,
-    SPOOF_MIN_SPEED_KTS,
+    SPEED_OF_LIGHT,
     SPOOF_MIN_FROZEN_FRAMES,
-    ALTITUDE_JUMP_THRESHOLD_FT,
-    ANOMALOUS_ACCEL_MS2,
-    LONG_HOVER_POSITION_EPSILON_DEG,
-    LONG_HOVER_MIN_DURATION_S,
+    SPOOF_MIN_SPEED_KTS,
+    _get_param,
+    get_mach1_doppler_threshold,
 )
 
 
@@ -770,10 +770,7 @@ class Track:
             return False
 
         duration_sec = (self.death_timestamp - self.birth_timestamp) / 1000.0
-        if duration_sec < 5.0:
-            return False
-
-        return True
+        return duration_sec >= 5.0
 
     def should_delete(self):
         if self.state_status == TrackState.TENTATIVE:

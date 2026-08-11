@@ -13,26 +13,26 @@ Issue #6: Make synthetic data streamer with anomalies (w and w/o ADS-B)
 """
 
 import math
+import random
 import time
 
+import pytest
+
 from retina_tracker.track_detections import (
-    Tracker,
-    set_config,
     MACH_1_MS,
     SPEED_OF_LIGHT,
+    Tracker,
+    set_config,
 )
-
-import random
-import pytest
 
 try:
     from motion_patterns import (
         CircularMotion,
-        SupersonicLinearMotion,
-        InstantDirectionChangeMotion,
         InstantAccelerationMotion,
-        SupersonicDirectionChangeMotion,
+        InstantDirectionChangeMotion,
         SupersonicAccelerationMotion,
+        SupersonicDirectionChangeMotion,
+        SupersonicLinearMotion,
     )
 except ImportError:
     pytest.skip("motion_patterns not available (requires synthetic-adsb)", allow_module_level=True)
