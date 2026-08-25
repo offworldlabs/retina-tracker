@@ -64,6 +64,10 @@ process_noise:
   delay: 0.1
   doppler: 0.5
 
+output:
+  max_bytes: 67108864     # Rotate the -s events file at this size (64 MiB, 0 disables)
+  backup_count: 1         # Rotated segments kept alongside the live file
+
 adsb:
   enabled: false          # Enable ADS-B-assisted track initialization
   priority: true          # Prefer ADS-B tracks in data association

@@ -7,6 +7,8 @@ import sys
 import numpy as np
 
 from .config import (
+    OUTPUT_BACKUP_COUNT,
+    OUTPUT_MAX_BYTES,
     get_config,
     load_blah2_config,
     load_config,
@@ -217,7 +219,11 @@ def main():
 
     event_writer = None
     if args.stream_output:
-        event_writer = TrackEventWriter(args.stream_output)
+        event_writer = TrackEventWriter(
+            args.stream_output,
+            max_bytes=OUTPUT_MAX_BYTES(),
+            backup_count=OUTPUT_BACKUP_COUNT(),
+        )
     elif args.tcp:
         event_writer = TrackEventWriter("-")
 
