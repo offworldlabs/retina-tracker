@@ -71,6 +71,10 @@ def load_config(config_path=None):
             "host": "0.0.0.0",
             "port": 3012,
         },
+        "output": {
+            "max_bytes": 67108864,
+            "backup_count": 1,
+        },
     }
 
     if config_path is None:
@@ -138,6 +142,14 @@ def GATE_THRESHOLD():
 
 def MIN_SNR():
     return _get_param("tracker", "min_snr", 4.0)
+
+
+def OUTPUT_MAX_BYTES():
+    return _get_param("output", "max_bytes", 67108864)
+
+
+def OUTPUT_BACKUP_COUNT():
+    return _get_param("output", "backup_count", 1)
 
 
 def PROCESS_NOISE_DELAY():

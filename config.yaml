@@ -34,6 +34,14 @@ adsb:
     position: 100.0           # Position uncertainty (meters)
     velocity: 5.0             # Velocity uncertainty (m/s)
 
+# Streaming JSONL output (-s flag)
+# Consumers tail the live file only, so each rotation drops whatever they had not
+# read yet (about one poll interval's worth). Keep max_bytes large: it makes
+# rotations rare, which is what keeps that loss negligible.
+output:
+  max_bytes: 67108864     # Rotate events file at this size (64 MiB, 0 disables)
+  backup_count: 1         # Rotated segments kept alongside the live file
+
 # Paths (relative to repo root)
 paths:
   data_dir: data
