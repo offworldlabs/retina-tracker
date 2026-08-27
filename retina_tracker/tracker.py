@@ -1,5 +1,7 @@
 """Core Tracker class and GNN data association logic."""
 
+import math
+import numbers
 from collections import deque
 
 import numpy as np
@@ -19,6 +21,8 @@ from .track import Track, TrackState
 
 MERGE_WINDOW_MS = 5000
 MAX_COMPLETED_TRACKS = 5000
+MAX_FRAME_DT_S = 60.0
+BACKWARDS_RUN_BEFORE_RESYNC = 3
 
 
 class Tracker:
@@ -31,7 +35,7 @@ class Tracker:
         self.completed_tracks = deque(maxlen=MAX_COMPLETED_TRACKS)
         self.last_timestamp = None
         self.detection_window = detection_window
-        self.frame_count = 0
+        self._reset_counters()
         self.event_writer = event_writer
         self.config = config if config else get_config()
 
@@ -50,13 +54,32 @@ class Tracker:
         self.all_tracks = []
         self.completed_tracks.clear()
         self.last_timestamp = None
+        self._reset_counters()
+
+    def _reset_counters(self):
         self.frame_count = 0
+        self.n_dt_clamped = 0
+        self.n_frames_rejected = 0
+        self.n_clock_resyncs = 0
+        self.n_backwards = 0
 
     def process_frame(self, detections, timestamp):
+        """Advance every track by one frame, `timestamp` in milliseconds.
+
+        A timestamp that is not a finite number drops the frame.
+        """
         self.frame_count += 1
 
+        if not isinstance(timestamp, numbers.Real) or not math.isfinite(timestamp):
+            self.n_frames_rejected += 1
+            return
+
         if self.last_timestamp is not None:
-            dt = (timestamp - self.last_timestamp) / 1000.0
+            raw_dt = (timestamp - self.last_timestamp) / 1000.0
+            dt = min(max(raw_dt, 0.0), MAX_FRAME_DT_S)
+            if dt != raw_dt:
+                self.n_dt_clamped += 1
+            self.n_backwards = self.n_backwards + 1 if raw_dt <= 0 else 0
         else:
             dt = 0.5
 
@@ -176,7 +199,12 @@ class Tracker:
         if len(self.all_tracks) > 1:
             self._merge_tracks()
 
-        self.last_timestamp = timestamp
+        resync = self.n_backwards >= BACKWARDS_RUN_BEFORE_RESYNC
+        if self.last_timestamp is None or timestamp > self.last_timestamp or resync:
+            if resync:
+                self.n_clock_resyncs += 1
+                self.n_backwards = 0
+            self.last_timestamp = timestamp
 
     def _associate(self, detections):
         if not self.tracks or not detections:
@@ -212,8 +240,8 @@ class Tracker:
             b = B[0, 1]
             c = B[1, 0]
             det_S = a * d - b * c
-            valid = np.abs(det_S) > 1e-15
-            if not np.any(valid):
+            pos_def = (a > 0) & (det_S > 1e-15)
+            if not np.any(pos_def):
                 continue
 
             gate = base_gate
@@ -226,9 +254,9 @@ class Tracker:
             nu0 = innovations[:, 0]
             nu1 = innovations[:, 1]
             mahal = np.full(len(detections), np.inf)
-            mahal[valid] = (
-                d[valid] * nu0[valid] ** 2 - (b + c) * nu0[valid] * nu1[valid] + a[valid] * nu1[valid] ** 2
-            ) / det_S[valid]
+            mahal[pos_def] = (
+                d[pos_def] * nu0[pos_def] ** 2 - (b + c) * nu0[pos_def] * nu1[pos_def] + a[pos_def] * nu1[pos_def] ** 2
+            ) / det_S[pos_def]
 
             within_gate = mahal < gate
             if not np.any(within_gate):
@@ -243,7 +271,7 @@ class Tracker:
 
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
-        associations = [(r, c) for r, c in zip(row_ind, col_ind) if cost_matrix[r, c] < 1e6]
+        associations = [(r, c) for r, c in zip(row_ind, col_ind) if 0 <= cost_matrix[r, c] < 1e6]
 
         return associations
 
