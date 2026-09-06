@@ -794,8 +794,17 @@ class Track:
 
     def get_recent_detections(self, n=20):
         """Return the last *n* non-None detections (reverse scan, early exit)."""
+        # Called off the frame worker (analytics, feed builders) while that worker
+        # may be appending, and a deque raises RuntimeError if it is mutated during
+        # Python-level iteration.  list(deque) is a single C call, so under the GIL
+        # it is an atomic snapshot; take both buffers before iterating.  The zip is
+        # unchanged: a reader that lands mid-append can see one more timestamp than
+        # measurement (the mutator appends timestamps first), and zip truncating to
+        # the shorter buffer is the same behaviour these buffers had as lists.
+        meas = list(self.history["measurements"])
+        ts_hist = list(self.history["timestamps"])
         result = []
-        for m, ts in zip(reversed(self.history["measurements"]), reversed(self.history["timestamps"])):
+        for m, ts in zip(reversed(meas), reversed(ts_hist)):
             if m is not None:
                 result.append(
                     {
@@ -812,6 +821,21 @@ class Track:
         return result
 
     def to_dict(self):
+        # Served from admin/state-snapshot threads while the frame worker appends.
+        # list(deque) is atomic under the GIL; the comprehensions below are not, so
+        # snapshot every buffer first.  The snapshots can differ in length by one
+        # (the mutator appends timestamps -> frames -> states -> measurements), so
+        # truncate to the common length to keep the emitted arrays aligned.
+        hist_timestamps = list(self.history["timestamps"])
+        hist_states = list(self.history["states"])
+        hist_measurements = list(self.history["measurements"])
+        hist_state_status = list(self.history["state_status"])
+        n_hist = min(len(hist_timestamps), len(hist_states), len(hist_measurements), len(hist_state_status))
+        hist_timestamps = hist_timestamps[:n_hist]
+        hist_states = hist_states[:n_hist]
+        hist_measurements = hist_measurements[:n_hist]
+        hist_state_status = hist_state_status[:n_hist]
+
         duration_sec = (self.death_timestamp - self.birth_timestamp) / 1000.0
         avg_snr = self.total_snr / max(self.n_associated, 1)
         continuity = self.n_associated / max(self.n_frames, 1)
@@ -835,11 +859,11 @@ class Track:
             "anomaly_types": list(self.anomaly_types),
             "anomaly_detections": self.anomaly_detections,
             "history": {
-                "timestamps": list(self.history["timestamps"]),
-                "states": [s.tolist() for s in self.history["states"]],
-                "delays": [m["delay"] if m else None for m in self.history["measurements"]],
-                "dopplers": [m["doppler"] if m else None for m in self.history["measurements"]],
-                "snrs": [m["snr"] if m else None for m in self.history["measurements"]],
-                "state_status": list(self.history["state_status"]),
+                "timestamps": hist_timestamps,
+                "states": [s.tolist() for s in hist_states],
+                "delays": [m["delay"] if m else None for m in hist_measurements],
+                "dopplers": [m["doppler"] if m else None for m in hist_measurements],
+                "snrs": [m["snr"] if m else None for m in hist_measurements],
+                "state_status": hist_state_status,
             },
         }
