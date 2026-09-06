@@ -1,5 +1,6 @@
 """Track class and state management for radar tracking."""
 
+from collections import deque
 from datetime import datetime
 from enum import Enum
 
@@ -27,6 +28,8 @@ from .config import (
     _get_param,
     get_mach1_doppler_threshold,
 )
+
+TRACK_HISTORY_MAX = 600
 
 
 class TrackState(Enum):
@@ -63,12 +66,15 @@ class Track:
             if _det_hex and isinstance(_det_hex, str):
                 self.adsb_hex = _det_hex
 
+        _hist_max = (
+            int(config.get("tracker", {}).get("track_history_max", TRACK_HISTORY_MAX)) if config else TRACK_HISTORY_MAX
+        )
         self.history = {
-            "timestamps": [timestamp],
-            "frames": [frame],
-            "states": [self.state.copy()],
-            "measurements": [detection],
-            "state_status": [self.state_status.name],
+            "timestamps": deque([timestamp], maxlen=_hist_max),
+            "frames": deque([frame], maxlen=_hist_max),
+            "states": deque([self.state.copy()], maxlen=_hist_max),
+            "measurements": deque([detection], maxlen=_hist_max),
+            "state_status": deque([self.state_status.name], maxlen=_hist_max),
         }
 
         self.n_frames = 1
@@ -788,15 +794,12 @@ class Track:
 
     def get_recent_detections(self, n=20):
         """Return the last *n* non-None detections (reverse scan, early exit)."""
-        measurements = self.history["measurements"]
-        timestamps = self.history["timestamps"]
         result = []
-        for i in range(len(measurements) - 1, -1, -1):
-            m = measurements[i]
+        for m, ts in zip(reversed(self.history["measurements"]), reversed(self.history["timestamps"])):
             if m is not None:
                 result.append(
                     {
-                        "timestamp": timestamps[i],
+                        "timestamp": ts,
                         "delay": m["delay"],
                         "doppler": m["doppler"],
                         "snr": m["snr"],
@@ -832,11 +835,11 @@ class Track:
             "anomaly_types": list(self.anomaly_types),
             "anomaly_detections": self.anomaly_detections,
             "history": {
-                "timestamps": self.history["timestamps"],
+                "timestamps": list(self.history["timestamps"]),
                 "states": [s.tolist() for s in self.history["states"]],
                 "delays": [m["delay"] if m else None for m in self.history["measurements"]],
                 "dopplers": [m["doppler"] if m else None for m in self.history["measurements"]],
                 "snrs": [m["snr"] if m else None for m in self.history["measurements"]],
-                "state_status": self.history["state_status"],
+                "state_status": list(self.history["state_status"]),
             },
         }
