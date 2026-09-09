@@ -11,6 +11,9 @@ from .config import (
     GATE_THRESHOLD,
     M_THRESHOLD,
     MIN_SNR,
+    SHADOW_DELAY_KM,
+    SHADOW_ENABLED,
+    SHADOW_SNR_MARGIN_DB,
     TRACKLET_MAX_DELAY_RESIDUAL,
     TRACKLET_MAX_DOPPLER_RESIDUAL,
     TRACKLET_MAX_TIME_SPAN,
@@ -64,6 +67,31 @@ class Tracker:
         self.n_clock_resyncs = 0
         self.n_backwards = 0
 
+    @staticmethod
+    def _mark_shadows(detections):
+        """Flag detections sitting behind a brighter return in delay.
+
+        Multipath and range sidelobes put a weaker copy of a strong target at
+        longer bistatic range. The copy obeys the same kinematics as the
+        target it came from, so nothing downstream of the filter can tell it
+        apart; the giveaway is a brighter detection sitting a short way in
+        front of it in the same frame. Doppler is deliberately not compared:
+        measured offsets ran to a median 35 Hz even for replicas within
+        1.5 km, because the replica travels a different path.
+        """
+        if not SHADOW_ENABLED():
+            for det in detections:
+                det["shadowed"] = False
+            return
+        window = SHADOW_DELAY_KM()
+        margin = SHADOW_SNR_MARGIN_DB()
+        for det in detections:
+            det["shadowed"] = any(
+                0 < det["delay"] - other["delay"] <= window and other["snr"] - det["snr"] >= margin
+                for other in detections
+                if other is not det
+            )
+
     def process_frame(self, detections, timestamp):
         """Advance every track by one frame, `timestamp` in milliseconds.
 
@@ -85,6 +113,7 @@ class Tracker:
             dt = 0.5
 
         detections = [d for d in detections if d["snr"] >= MIN_SNR()]
+        self._mark_shadows(detections)
 
         for track in self.tracks:
             track.predict(dt)
@@ -118,6 +147,7 @@ class Tracker:
                         is_anomalous=track.is_anomalous,
                         max_velocity_ms=track.max_velocity_ms,
                         anomaly_types=track.anomaly_types,
+                        shadow_fraction=track.shadow_fraction(),
                     )
                 else:
                     detections_window = track.get_recent_detections(n=self.detection_window)
@@ -131,6 +161,7 @@ class Tracker:
                         is_anomalous=track.is_anomalous,
                         max_velocity_ms=track.max_velocity_ms,
                         anomaly_types=track.anomaly_types,
+                        shadow_fraction=track.shadow_fraction(),
                     )
 
         for i, track in enumerate(self.tracks):
@@ -329,6 +360,7 @@ class Tracker:
             if (
                 max_delay_residual < TRACKLET_MAX_DELAY_RESIDUAL()
                 and max_doppler_residual < TRACKLET_MAX_DOPPLER_RESIDUAL()
+                and not track.is_shadowed()
             ):
                 track.state_status = TrackState.ACTIVE
 
@@ -348,6 +380,7 @@ class Tracker:
                         is_anomalous=track.is_anomalous,
                         max_velocity_ms=track.max_velocity_ms,
                         anomaly_types=track.anomaly_types,
+                        shadow_fraction=track.shadow_fraction(),
                     )
 
     def _merge_tracks(self):

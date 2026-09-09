@@ -25,6 +25,7 @@ from .config import (
     N_WINDOW,
     ORBIT_HEADING_WINDOW,
     ORBIT_MIN_CUMULATIVE_DEG,
+    SHADOW_MIN_FRACTION,
     SPEED_OF_LIGHT,
     SPOOF_MIN_FROZEN_FRAMES,
     SPOOF_MIN_SPEED_KTS,
@@ -85,6 +86,8 @@ class Track:
         self.n_frames = 1
         self.n_associated = 0
         self.n_missed = 0
+        self.n_shadow_obs = 1
+        self.n_shadowed = 1 if detection.get("shadowed") else 0
 
         self.total_snr = detection["snr"]
         self.birth_timestamp = timestamp
@@ -687,6 +690,10 @@ class Track:
                 self.adsb_hex = adsb["hex"]
                 self.adsb_initialized = True
 
+        self.n_shadow_obs += 1
+        if detection.get("shadowed"):
+            self.n_shadowed += 1
+
         self.history["timestamps"].append(timestamp)
         self.history["frames"].append(frame)
         self.history["states"].append(self.state.copy())
@@ -732,10 +739,35 @@ class Track:
     def get_innovation_base(self):
         return self.kf.get_innovation_base(self.covariance)
 
+    def is_shadowed(self):
+        """Whether this track lives in the delay shadow of brighter returns.
+
+        A strong aircraft casts multipath and sidelobe replicas at longer
+        bistatic range and lower SNR. Measured on a live node over 93
+        same-frame pairs: 89% of the spurious detections around an aircraft
+        sat at longer delay than it and 99% were weaker, median 6.9 dB down.
+        They are kinematically consistent, so the filter cannot reject them;
+        only their position relative to a brighter return gives them away.
+        """
+        if self.n_shadow_obs < 3:
+            return False
+        return self.shadow_fraction() >= SHADOW_MIN_FRACTION()
+
+    def shadow_fraction(self):
+        """Share of this track's detections that sat behind a brighter return.
+
+        Reported so a site where the shadow thresholds do not fit is visible
+        without anyone analysing anything: on the node these were measured
+        against, every ADS-B-matched aircraft stayed at 0.00 while replica
+        tracks ran a median of 0.64. An identified aircraft drifting up from
+        zero means the thresholds are wrong here.
+        """
+        return self.n_shadowed / max(self.n_shadow_obs, 1)
+
     def promote_if_ready(self):
         if self.state_status == TrackState.TENTATIVE:
             if self.n_frames >= N_WINDOW():
-                if self.n_associated >= M_THRESHOLD():
+                if self.n_associated >= M_THRESHOLD() and not self.is_shadowed():
                     self.state_status = TrackState.ACTIVE
                     return True
         return False
@@ -842,6 +874,7 @@ class Track:
             "avg_snr": avg_snr,
             "duration_sec": duration_sec,
             "continuity": continuity,
+            "shadow_fraction": self.shadow_fraction(),
             "birth_timestamp": self.birth_timestamp,
             "death_timestamp": self.death_timestamp,
             "is_anomalous": self.is_anomalous,

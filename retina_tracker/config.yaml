@@ -21,6 +21,17 @@ radar:
 process_noise:
   range_jerk: 1.0e-7      # Bistatic range jerk PSD (km^2/s^5)
 
+# Multipath and sidelobe suppression. A strong target casts weaker replicas at
+# longer bistatic range; they obey the same kinematics as the target, so only
+# their position behind a brighter return gives them away. Measured on a live
+# node: aircraft tracks never exceeded a shadowed fraction of 0.10, while
+# replica tracks ran a median of 0.64.
+shadow:
+  enabled: true
+  delay_km: 3.0          # how far behind a brighter return counts as shadowed
+  snr_margin_db: 3.0     # how much brighter that return must be
+  min_fraction: 0.5      # shadowed share of a track's detections that blocks promotion
+
 # Tracklet initiation thresholds
 tracklet:
   max_delay_residual: 2.0     # Max delay residual for linear fit

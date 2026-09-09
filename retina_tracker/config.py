@@ -57,6 +57,7 @@ def load_config(config_path=None):
         },
         "process_noise": {"range_jerk": 1e-7},
         "tracklet": {"max_delay_residual": 2.0, "max_doppler_residual": 10.0, "max_time_span": 3.0},
+        "shadow": {"enabled": True, "delay_km": 3.0, "snr_margin_db": 3.0, "min_fraction": 0.5},
         "adsb": {
             "enabled": False,
             "priority": True,
@@ -167,6 +168,22 @@ def WAVELENGTH_KM():
 
 def PROCESS_NOISE_JERK():
     return _get_param("process_noise", "range_jerk", 1e-7)
+
+
+def SHADOW_ENABLED():
+    return _get_param("shadow", "enabled", True)
+
+
+def SHADOW_DELAY_KM():
+    return _get_param("shadow", "delay_km", 3.0)
+
+
+def SHADOW_SNR_MARGIN_DB():
+    return _get_param("shadow", "snr_margin_db", 3.0)
+
+
+def SHADOW_MIN_FRACTION():
+    return _get_param("shadow", "min_fraction", 0.5)
 
 
 def TRACKLET_MAX_DELAY_RESIDUAL():

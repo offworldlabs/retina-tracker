@@ -48,6 +48,7 @@ class TrackEventWriter:
         is_anomalous=False,
         max_velocity_ms=0.0,
         anomaly_types=None,
+        shadow_fraction=0.0,
     ):
         event = {
             "track_id": track_id,
@@ -59,6 +60,7 @@ class TrackEventWriter:
             "is_anomalous": is_anomalous,
             "max_velocity_ms": max_velocity_ms,
             "anomaly_types": sorted(anomaly_types) if anomaly_types else [],
+            "shadow_fraction": shadow_fraction,
         }
         line = json.dumps(event) + "\n"
 
