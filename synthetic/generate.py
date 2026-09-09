@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import defaultdict
 
 import numpy as np
 
@@ -28,11 +29,12 @@ def generate(
     site: Site | None = None,
     concurrent: int | None = None,
     clutter_per_frame: float | None = None,
+    spawn_radius_km: float | None = None,
     epoch_ms: int = DEFAULT_EPOCH_MS,
 ) -> tuple[list[dict], list[dict]]:
     site = site or Site()
     rng = np.random.default_rng(seed)
-    fleet = build_fleet(site, duration_s, rng, concurrent=concurrent)
+    fleet = build_fleet(site, duration_s, rng, concurrent=concurrent, spawn_radius_km=spawn_radius_km)
     sensor = Sensor(site, rng, clutter_per_frame=clutter_per_frame)
 
     frames: list[dict] = []
@@ -50,6 +52,38 @@ def generate(
     return frames, truths
 
 
+SLEW_WINDOW_S = 10.0
+
+
+def doppler_slew(frames: list[dict], window_s: float = SLEW_WINDOW_S) -> list[float]:
+    """|dDoppler/dt| per ADS-B-matched aircraft, regressed over a window.
+
+    Differencing adjacent frames measures mostly noise: 0.63 Hz of residual
+    over a 1 s frame is 0.9 Hz/s of it, the same order as the signal. On this
+    generator the two estimators read 0.97 and 0.34 Hz/s for the same data,
+    which is why the constant this feeds needs a stated estimator to mean
+    anything. Matched rather than truth-sourced so it is the same measurement
+    retina_tracker.live_score makes on a real node.
+    """
+    series: dict[str, dict[int, float]] = defaultdict(dict)
+    for frame in frames:
+        for doppler, adsb in zip(frame["doppler"], frame["adsb"]):
+            if adsb and adsb.get("hex"):
+                series[adsb["hex"]][frame["timestamp"]] = doppler
+    slews: list[float] = []
+    for rows in series.values():
+        stamps = sorted(rows)
+        times = np.array(stamps, dtype=float) / 1000.0
+        values = np.array([rows[k] for k in stamps], dtype=float)
+        for i in range(len(times)):
+            j = i
+            while j + 1 < len(times) and times[j + 1] - times[i] <= window_s:
+                j += 1
+            if j - i >= 4 and times[j] - times[i] >= window_s * 0.6:
+                slews.append(abs(float(np.polyfit(times[i : j + 1], values[i : j + 1], 1)[0])))
+    return slews
+
+
 def summarise(frames: list[dict], truths: list[dict]) -> dict:
     counts = [len(f["delay"]) for f in frames]
     snr = np.array([s for f in frames for s in f["snr"]])
@@ -63,6 +97,8 @@ def summarise(frames: list[dict], truths: list[dict]) -> dict:
     clutter_snr = np.array(
         [s for f, tr in zip(frames, truths) for s, src in zip(f["snr"], tr["sources"]) if src is None]
     )
+    slews = doppler_slew(frames)
+    matched_delay = [d for f in frames for d, a in zip(f["delay"], f["adsb"]) if a]
     n_target = sum(1 for tr in truths for s in tr["sources"] if s is not None)
     correct = sum(
         1 for tr in truths for src, mat in zip(tr["sources"], tr["matched"]) if src is not None and mat == src
@@ -80,6 +116,9 @@ def summarise(frames: list[dict], truths: list[dict]) -> dict:
         "adsb_match_rate": round(len(matched) / max(len(adsb), 1), 3),
         "adsb_correct_rate": round(correct / max(n_target, 1), 3),
         "clutter_false_match": stolen,
+        "doppler_slew_median": round(float(np.median(slews)), 3) if slews else None,
+        "doppler_slew_p95": round(float(np.percentile(slews, 95)), 3) if slews else None,
+        "target_delay_median": round(float(np.median(matched_delay)), 1) if matched_delay else None,
         "snr_median": round(float(np.median(snr)), 2),
         "target_snr_median": round(float(np.median(target_snr)), 2),
         "target_snr_p95": round(float(np.percentile(target_snr, 95)), 2),
@@ -129,6 +168,12 @@ def main() -> None:
     parser.add_argument("-s", "--seed", type=int, default=20260908)
     parser.add_argument("--concurrent", type=int, help="Aircraft airborne at any instant")
     parser.add_argument("--clutter", type=float, help="False alarms per frame (default: measured 2.54)")
+    parser.add_argument(
+        "--spawn-radius",
+        type=float,
+        help="Traffic disc radius in km. Sets how close aircraft pass, which is what "
+        "drives Doppler slew and differs most between sites (default: measured 46)",
+    )
     parser.add_argument("--fc", type=float, help="Centre frequency in Hz")
     parser.add_argument("--stats", action="store_true", help="Print measured statistics of the result")
     args = parser.parse_args()
@@ -140,6 +185,7 @@ def main() -> None:
         site=site,
         concurrent=args.concurrent,
         clutter_per_frame=args.clutter,
+        spawn_radius_km=args.spawn_radius,
     )
 
     truth_path = args.truth or f"{args.output}.truth.jsonl"

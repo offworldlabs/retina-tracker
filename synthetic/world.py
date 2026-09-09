@@ -223,7 +223,9 @@ def build_fleet(
             alt_m=ft2m(rng.uniform(*cls["alt_ft"])),
             speed_ms=speed_ms,
             heading_deg=heading,
-            turn_rate_deg_s=float(rng.normal(0.0, 0.12)) if rng.random() < 0.35 else 0.0,
+            turn_rate_deg_s=(
+                float(rng.normal(0.0, profile.TURN_RATE_SIGMA_DEG_S)) if rng.random() < profile.TURN_FRACTION else 0.0
+            ),
             vertical_rate_ms=rng.uniform(*cls["climb_fpm"]) * 0.00508,
             enter_s=enter_s,
             exit_s=enter_s + chord_s,

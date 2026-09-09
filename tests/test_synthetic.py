@@ -17,9 +17,9 @@ import numpy as np
 import pytest
 
 from synthetic import profile
-from synthetic.generate import continuity, generate, summarise
+from synthetic.generate import continuity, doppler_slew, generate, summarise
 from synthetic.score import score
-from synthetic.world import Site, bistatic
+from synthetic.world import Site, bistatic, build_fleet
 
 SEEDS = range(20260908, 20260914)
 REFERENCE_DURATION_S = 118.0
@@ -313,3 +313,49 @@ def test_a_minority_of_aircraft_carry_no_adsb(runs):
     )
     assert equipped[False] > 0
     assert equipped[True] > equipped[False] * 5
+
+
+def test_doppler_slew_matches_the_recorded_estimator(runs):
+    """The constant the tracker's process noise is sized against.
+
+    Pinned because it went unasserted and drifted: profile recorded 0.570 Hz/s
+    while the generator produced 0.97 differenced and 0.34 regressed, so the
+    number matched neither estimator of its own output. generate.doppler_slew
+    fixes the estimator; this stops it drifting again.
+    """
+    slews = [s for frames, _ in runs for s in doppler_slew(frames)]
+    assert close_to(float(np.median(slews)), profile.DOPPLER_RATE_MEDIAN_HZ_S)
+    assert close_to(float(np.percentile(slews, 95)), profile.DOPPLER_RATE_P95_HZ_S)
+
+
+def test_traffic_passes_at_the_recorded_range(runs):
+    """Slew is dominated by how close aircraft pass, so the geometry is pinned
+    beside it. A second site's traffic sits at 5.8 km against this 29.8 and
+    slews 2.9x faster, which is why generate takes a spawn radius."""
+    delays = [d for frames, _ in runs for f in frames for d, a in zip(f["delay"], f["adsb"]) if a]
+    assert close_to(float(np.median(delays)), profile.TARGET_DELAY_MEDIAN_KM)
+
+
+def test_a_closer_traffic_disc_slews_faster():
+    """The mechanism behind the site difference, rather than the site's numbers.
+
+    Nothing here is fitted to the second site; it only has to hold that pulling
+    traffic closer raises the slew, which is what makes spawn_radius_km the
+    right knob for matching a site.
+    """
+    far, _ = generate(duration_s=REFERENCE_DURATION_S, seed=SEEDS[0], spawn_radius_km=46.0)
+    near, _ = generate(duration_s=REFERENCE_DURATION_S, seed=SEEDS[0], spawn_radius_km=12.0)
+    assert np.median(doppler_slew(near)) > np.median(doppler_slew(far))
+
+
+def test_the_turn_model_reads_the_profile(monkeypatch):
+    """Both knobs were bare literals inside build_fleet, and an unreferenced
+    constant is exactly how the slew figure drifted."""
+    monkeypatch.setattr(profile, "TURN_FRACTION", 0.0)
+    straight = build_fleet(Site(), 118.0, np.random.default_rng(1))
+    assert all(a.turn_rate_deg_s == 0.0 for a in straight.aircraft)
+
+    monkeypatch.setattr(profile, "TURN_FRACTION", 1.0)
+    monkeypatch.setattr(profile, "TURN_RATE_SIGMA_DEG_S", 2.0)
+    turning = build_fleet(Site(), 118.0, np.random.default_rng(1))
+    assert any(abs(a.turn_rate_deg_s) > 0.5 for a in turning.aircraft)
