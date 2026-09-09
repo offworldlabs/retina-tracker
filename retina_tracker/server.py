@@ -3,8 +3,12 @@
 import json
 import socket
 import sys
+import threading
 
 from .config import get_config
+from .control import DEFAULT_HOST as CONTROL_HOST
+from .control import DEFAULT_PORT as CONTROL_PORT
+from .control import start_control_server
 from .tracker import Tracker
 
 
@@ -35,7 +39,8 @@ def process_streaming_frame(tracker, frame):
     tracker.process_frame(detections, timestamp)
 
 
-def run_tcp_server(host="0.0.0.0", port=3012, event_writer=None, detection_window=20, config=None):
+def run_tcp_server(host="0.0.0.0", port=3012, event_writer=None, detection_window=20,
+                   config=None, control_host=CONTROL_HOST, control_port=CONTROL_PORT):
     """Run tracker as TCP server receiving detection frames from blah2.
 
     Args:
@@ -44,12 +49,24 @@ def run_tcp_server(host="0.0.0.0", port=3012, event_writer=None, detection_windo
         event_writer: TrackEventWriter for streaming output
         detection_window: Number of detections in sliding window
         config: Configuration dict
+        control_host: Bind address for the HTTP control surface
+        control_port: Port for the HTTP control surface; 0 disables it
     """
     tracker = Tracker(
         event_writer=event_writer,
         detection_window=detection_window,
         config=config or get_config(),
     )
+
+    # Guards every mutation of `tracker`. The frame path has always been
+    # single-threaded, so this is uncontended right up until the control
+    # surface below can reset from a request thread.
+    tracker_lock = threading.Lock()
+
+    if control_port:
+        control = start_control_server(tracker, tracker_lock,
+                                       host=control_host, port=control_port)
+        print(f"Tracker control on {control_host}:{control.port}", file=sys.stderr)
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -78,10 +95,17 @@ def run_tcp_server(host="0.0.0.0", port=3012, event_writer=None, detection_windo
                         # A real detection frame never carries a "type" key,
                         # so this can never misfire on genuine data.
                         if frame.get("type") == "RESET":
-                            tracker.reset()
+                            # Kept alongside POST /reset while retina-gui is
+                            # still the process feeding this socket. It goes
+                            # when that does: a control message riding in the
+                            # data stream only works while one process sends
+                            # both, which is the arrangement being unwound.
+                            with tracker_lock:
+                                tracker.reset()
                             print("Tracker state reset", file=sys.stderr)
                             continue
-                        process_streaming_frame(tracker, frame)
+                        with tracker_lock:
+                            process_streaming_frame(tracker, frame)
 
             except (ConnectionResetError, BrokenPipeError):
                 print("blah2 disconnected", file=sys.stderr)

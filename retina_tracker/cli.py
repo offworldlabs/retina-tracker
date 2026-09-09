@@ -205,6 +205,12 @@ def main():
     parser.add_argument("--tcp", action="store_true", help="Run as TCP server for streaming input from blah2")
     parser.add_argument("--tcp-host", default="0.0.0.0", help="TCP bind address (default: 0.0.0.0)")
     parser.add_argument("--tcp-port", type=int, default=3012, help="TCP port to listen on (default: 3012)")
+    parser.add_argument("--control-host", default="127.0.0.1",
+                        help="HTTP control surface bind address (default: 127.0.0.1). "
+                             "Loopback by default because the container runs with "
+                             "network_mode host, where 0.0.0.0 would publish it on the LAN.")
+    parser.add_argument("--control-port", type=int, default=30101,
+                        help="HTTP control surface port (default: 30101). 0 disables it.")
 
     args = parser.parse_args()
 
@@ -239,6 +245,8 @@ def main():
             event_writer=event_writer,
             detection_window=args.detection_window,
             config=get_config(),
+            control_host=args.control_host,
+            control_port=args.control_port,
         )
     else:
         tracker = process_detections(args.file, event_writer=event_writer, detection_window=args.detection_window)
