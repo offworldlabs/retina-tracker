@@ -41,3 +41,19 @@ _.get_tracks
 # TODO: no reference found anywhere in the estate
 #   retina_tracker/track.py:760  (unused method)
 _.is_high_quality
+# TODO: recorded reference measurements from the Atlanta live capture that
+# tests/test_synthetic.py does not yet assert (it covers 23 of the 54 constants
+# in the module). Decide per name: add an assertion so the generator cannot
+# drift away from it, or drop it from the reference record.
+#   synthetic/profile.py:25-90  (unused variables)
+CPI_S
+SAMPLE_RATE_HZ
+DELAY_BIN_KM
+DELAY_MIN_KM
+DOPPLER_BIN_HZ
+LONGEST_RUN_MAX
+TARGET_HITS_MEDIAN
+TARGET_HITS_MAX
+BISTATIC_RANGE_RATE_MEDIAN_MS
+DOPPLER_RATE_MEDIAN_HZ_S
+DOPPLER_RATE_P95_HZ_S
