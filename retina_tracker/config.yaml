@@ -17,9 +17,17 @@ tracker:
 radar:
   center_frequency: 177000000
 
-# Process noise (Kalman filter)
+# Process noise. Bistatic range acceleration is dominated by geometry rather
+# than by the aircraft, so it differs more between sites than between flight
+# phases: two nodes measured 2.9x apart, driven by traffic passing at 29.8 km
+# against 5.8 km. There is therefore no single right jerk, so range_jerk is a
+# floor and the filter widens from it by however far its own residuals say its
+# motion model is failing.
 process_noise:
-  range_jerk: 1.0e-7      # Bistatic range jerk PSD (km^2/s^5)
+  range_jerk: 1.0e-7      # Bistatic range jerk PSD floor (km^2/s^5)
+  adaptive: true          # Widen from the floor on the filter's own residuals
+  max_scale: 25.0         # Ceiling on that widening
+  nis_memory: 0.25        # Weight on the newest residual, so ~4 frames of memory
 
 # Multipath and sidelobe suppression. A strong target casts weaker replicas at
 # longer bistatic range; they obey the same kinematics as the target, so only

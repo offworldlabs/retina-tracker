@@ -25,6 +25,9 @@ from .config import (
     N_WINDOW,
     ORBIT_HEADING_WINDOW,
     ORBIT_MIN_CUMULATIVE_DEG,
+    PROCESS_NOISE_ADAPTIVE,
+    PROCESS_NOISE_MAX_SCALE,
+    PROCESS_NOISE_NIS_MEMORY,
     SHADOW_MIN_FRACTION,
     SPEED_OF_LIGHT,
     SPOOF_MIN_FROZEN_FRAMES,
@@ -33,7 +36,7 @@ from .config import (
     _get_param,
     get_mach1_doppler_threshold,
 )
-from .kalman import doppler_to_range_rate
+from .kalman import MEASUREMENT_DIM, doppler_to_range_rate
 
 TRACK_HISTORY_MAX = 600
 
@@ -87,6 +90,7 @@ class Track:
         self.n_associated = 0
         self.n_missed = 0
         self.n_shadow_obs = 1
+        self.nis_ema = float(MEASUREMENT_DIM)
         self.n_shadowed = 1 if detection.get("shadowed") else 0
 
         self.total_snr = detection["snr"]
@@ -664,9 +668,24 @@ class Track:
         cls._daily_counter += 1
         return track_id
 
+    def process_noise_scale(self):
+        """How far the filter's own residuals say its motion model is wrong.
+
+        A matched filter produces a normalised innovation squared averaging
+        the measurement dimension, so the ratio to that is how badly the
+        constant-acceleration assumption is failing right now. A banking
+        aircraft drives it up and widens the gate for exactly as long as it
+        banks; a cruising one leaves it at the floor. Floored at 1 rather
+        than allowed to shrink, so a well-modelled target behaves exactly as
+        it did before this existed.
+        """
+        if not PROCESS_NOISE_ADAPTIVE():
+            return 1.0
+        return min(max(self.nis_ema / MEASUREMENT_DIM, 1.0), PROCESS_NOISE_MAX_SCALE())
+
     def predict(self, dt):
         self.kf.dt = dt
-        state_pred, cov_pred = self.kf.predict(self.state, self.covariance)
+        state_pred, cov_pred = self.kf.predict(self.state, self.covariance, self.process_noise_scale())
         self.state = state_pred
         # Freeze covariance growth once coasting exceeds N_COAST so the
         # association gate stops inflating toward unrelated detections while
@@ -676,7 +695,11 @@ class Track:
 
     def update(self, detection, timestamp, frame=0):
         measurement = np.array([detection["delay"], doppler_to_range_rate(detection["doppler"])])
-        self.state, self.covariance = self.kf.update(self.state, self.covariance, measurement, detection.get("snr"))
+        self.state, self.covariance, nis = self.kf.update(
+            self.state, self.covariance, measurement, detection.get("snr")
+        )
+        memory = PROCESS_NOISE_NIS_MEMORY()
+        self.nis_ema = (1.0 - memory) * self.nis_ema + memory * nis
 
         # Identity swap check MUST run before adsb_hex capture
         self._check_identity_change_anomaly(detection, timestamp)

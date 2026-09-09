@@ -11,6 +11,10 @@ from .config import (
     WAVELENGTH_KM,
 )
 
+# Delay and range rate. A property of the design, not of an instance: Track
+# needs it before it has a filter.
+MEASUREMENT_DIM = 2
+
 
 def _symmetrised(covariance):
     """Round-off in (I - KH)P leaves the two off-diagonal entries differing in
@@ -44,7 +48,7 @@ class KalmanFilter:
     def __init__(self, dt=0.5):
         self.dt = dt
         self.dim_state = 3
-        self.dim_meas = 2
+        self.dim_meas = MEASUREMENT_DIM
 
         self.F = np.eye(self.dim_state)
         self.H = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
@@ -55,7 +59,16 @@ class KalmanFilter:
         wavelength = WAVELENGTH_KM()
         return np.diag([MEASUREMENT_NOISE_DELAY, wavelength * wavelength * MEASUREMENT_NOISE_DOPPLER])
 
-    def predict(self, state, covariance):
+    def predict(self, state, covariance, q_scale=1.0):
+        """Advance one frame.
+
+        q_scale multiplies the jerk driving the acceleration state. Bistatic
+        range acceleration is dominated by geometry rather than by the
+        aircraft, so it differs between sites by more than it differs between
+        flight phases - two nodes measured 2.9x apart. There is no single
+        right jerk, which is why the caller derives this from the filter's
+        own residuals rather than a constant carrying it.
+        """
         dt = self.dt
         # Rebuild F and Q with the current dt so predictions match the actual
         # frame interval (which can vary from 0.5 s for real nodes to 40 s for
@@ -71,7 +84,7 @@ class KalmanFilter:
         F[0, 2] = 0.5 * dt2
         F[1, 2] = dt
 
-        jerk = PROCESS_NOISE_JERK()
+        jerk = PROCESS_NOISE_JERK() * q_scale
         Q = self.Q
         Q[0, 0] = jerk * dt5 / 20.0
         Q[0, 1] = Q[1, 0] = jerk * dt4 / 8.0
@@ -115,12 +128,13 @@ class KalmanFilter:
             K = covariance @ self.H.T @ np.linalg.inv(S)
         except np.linalg.LinAlgError:
             print("Warning: Singular innovation covariance in Kalman update, skipping measurement", file=sys.stderr)
-            return state, covariance
+            return state, covariance, float(MEASUREMENT_DIM)
 
         state_upd = state + K @ innovation
         cov_upd = (np.eye(self.dim_state) - K @ self.H) @ covariance
+        nis = float(innovation @ np.linalg.solve(S, innovation))
 
-        return state_upd, _symmetrised(cov_upd)
+        return state_upd, _symmetrised(cov_upd), nis
 
     def get_innovation_covariance(self, covariance, snr=None):
         S = self.H @ covariance @ self.H.T + self.R * self.measurement_noise_scale(snr)
