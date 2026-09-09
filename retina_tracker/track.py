@@ -10,6 +10,7 @@ from . import geometry
 from .config import (
     ALTITUDE_JUMP_THRESHOLD_FT,
     ANOMALOUS_ACCEL_MS2,
+    INITIAL_RANGE_ACCEL_VARIANCE,
     KNOTS_TO_MS,
     LONG_HOVER_MIN_DURATION_S,
     LONG_HOVER_POSITION_EPSILON_DEG,
@@ -17,6 +18,8 @@ from .config import (
     MACH_1_MS,
     MAX_DIRECTION_CHANGE_DEG_PER_SEC,
     MAX_NORMAL_ACCEL_MS2,
+    MEASUREMENT_NOISE_DELAY,
+    MEASUREMENT_NOISE_DOPPLER,
     N_COAST,
     N_DELETE,
     N_WINDOW,
@@ -25,9 +28,11 @@ from .config import (
     SPEED_OF_LIGHT,
     SPOOF_MIN_FROZEN_FRAMES,
     SPOOF_MIN_SPEED_KTS,
+    WAVELENGTH_KM,
     _get_param,
     get_mach1_doppler_threshold,
 )
+from .kalman import doppler_to_range_rate
 
 TRACK_HISTORY_MAX = 600
 
@@ -626,34 +631,19 @@ class Track:
         self.adsb_hex = adsb.get("hex")
         self.adsb_initialized = True
 
-        self.state = np.array([detection["delay"], 0.0, detection["doppler"], 0.0])
-
-        if adsb.get("gs") is not None and adsb.get("track") is not None:
-            gs = adsb["gs"]
-            track = adsb["track"]
-            if not (gs >= 0 and 0 <= track < 360 and not np.isnan(gs) and not np.isnan(track)):
-                pass
-            else:
-                vel_east, vel_north, vel_up = geometry.enu_velocity_from_adsb(gs, track, adsb.get("geom_rate", 0))
-                if np.isnan(vel_east) or np.isnan(vel_north) or np.isnan(vel_up):
-                    pass
-                else:
-                    vel_horiz = np.sqrt(vel_east**2 + vel_north**2)
-                    if np.isnan(vel_horiz) or np.isinf(vel_horiz):
-                        pass
-                    else:
-                        delay_rate_est = vel_horiz / 299792.458
-                        if not (np.isnan(delay_rate_est) or np.isinf(delay_rate_est)):
-                            self.state[1] = delay_rate_est
-
-        pos_unc = adsb_config["initial_covariance"]["position"]
-        vel_unc = adsb_config["initial_covariance"]["velocity"]
-        delay_unc = pos_unc / 1000.0
-        self.covariance = np.diag([delay_unc, vel_unc / 1000, 20.0, 10.0])
+        self._init_from_delay_doppler(detection)
+        self.covariance[0, 0] = adsb_config["initial_covariance"]["position"] / 1000.0
 
     def _init_from_delay_doppler(self, detection):
-        self.state = np.array([detection["delay"], 0.0, detection["doppler"], 0.0])
-        self.covariance = np.diag([10.0, 5.0, 20.0, 10.0])
+        wavelength = WAVELENGTH_KM()
+        self.state = np.array([detection["delay"], doppler_to_range_rate(detection["doppler"]), 0.0])
+        self.covariance = np.diag(
+            [
+                MEASUREMENT_NOISE_DELAY,
+                wavelength * wavelength * MEASUREMENT_NOISE_DOPPLER,
+                INITIAL_RANGE_ACCEL_VARIANCE,
+            ]
+        )
 
     @classmethod
     def _generate_id(cls, timestamp_ms, adsb_hex=None):
@@ -682,7 +672,7 @@ class Track:
             self.covariance = cov_pred
 
     def update(self, detection, timestamp, frame=0):
-        measurement = np.array([detection["delay"], detection["doppler"]])
+        measurement = np.array([detection["delay"], doppler_to_range_rate(detection["doppler"])])
         self.state, self.covariance = self.kf.update(self.state, self.covariance, measurement, detection.get("snr"))
 
         # Identity swap check MUST run before adsb_hex capture

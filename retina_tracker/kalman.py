@@ -1,4 +1,4 @@
-"""Kalman filter for constant velocity model in delay-Doppler space."""
+"""Kalman filter over bistatic range for delay-Doppler detections."""
 
 import sys
 
@@ -7,37 +7,53 @@ import numpy as np
 from .config import (
     MEASUREMENT_NOISE_DELAY,
     MEASUREMENT_NOISE_DOPPLER,
-    PROCESS_NOISE_DELAY,
-    PROCESS_NOISE_DOPPLER,
+    PROCESS_NOISE_JERK,
+    WAVELENGTH_KM,
 )
 
 
-class KalmanFilter:
-    """2D Kalman filter for constant velocity model in delay-Doppler space.
+def _symmetrised(covariance):
+    """Round-off in (I - KH)P leaves the two off-diagonal entries differing in
+    the last bit. While delay and Doppler were independent chains those entries
+    were exactly zero and nothing noticed; a coupled state correlates range with
+    its rate, and the association gate reads S as symmetric when it applies
+    Sylvester's criterion to it."""
+    return (covariance + covariance.T) / 2.0
 
-    State vector: [delay, delay_rate, doppler, doppler_rate]
+
+def doppler_to_range_rate(doppler_hz):
+    return -WAVELENGTH_KM() * doppler_hz
+
+
+def range_rate_to_doppler(range_rate_km_s):
+    return -range_rate_km_s / WAVELENGTH_KM()
+
+
+class KalmanFilter:
+    """Constant-acceleration filter on bistatic range.
+
+    State vector: [range_km, range_rate_km_s, range_accel_km_s2]
+
+    Doppler is not an independent quantity to be tracked alongside delay: it is
+    the range rate, through range_rate = -wavelength * doppler. A detection
+    therefore measures the first two state elements directly, and the rate
+    arrives at the accuracy of the Doppler bin rather than being fitted from
+    successive noisy range measurements.
     """
 
     def __init__(self, dt=0.5):
         self.dt = dt
-        self.dim_state = 4
+        self.dim_state = 3
         self.dim_meas = 2
 
-        self.F = np.array([[1, dt, 0, 0], [0, 1, 0, 0], [0, 0, 1, dt], [0, 0, 0, 1]])
-        self.H = np.array([[1, 0, 0, 0], [0, 0, 1, 0]])
+        self.F = np.eye(self.dim_state)
+        self.H = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        self.Q = np.zeros((self.dim_state, self.dim_state))
 
-        q_delay = PROCESS_NOISE_DELAY()
-        q_doppler = PROCESS_NOISE_DOPPLER()
-        self.Q = np.array(
-            [
-                [q_delay * dt**3 / 3, q_delay * dt**2 / 2, 0, 0],
-                [q_delay * dt**2 / 2, q_delay * dt, 0, 0],
-                [0, 0, q_doppler * dt**3 / 3, q_doppler * dt**2 / 2],
-                [0, 0, q_doppler * dt**2 / 2, q_doppler * dt],
-            ]
-        )
-
-        self.R = np.diag([MEASUREMENT_NOISE_DELAY, MEASUREMENT_NOISE_DOPPLER])
+    @property
+    def R(self):
+        wavelength = WAVELENGTH_KM()
+        return np.diag([MEASUREMENT_NOISE_DELAY, wavelength * wavelength * MEASUREMENT_NOISE_DOPPLER])
 
     def predict(self, state, covariance):
         dt = self.dt
@@ -45,33 +61,37 @@ class KalmanFilter:
         # frame interval (which can vary from 0.5 s for real nodes to 40 s for
         # synthetic fleet nodes).  Uses in-place writes to pre-allocated
         # arrays to avoid per-call np.array() allocation overhead.
-        F = self.F
-        F[0, 1] = dt
-        F[2, 3] = dt
-        q_delay = PROCESS_NOISE_DELAY()
-        q_doppler = PROCESS_NOISE_DOPPLER()
         dt2 = dt * dt
         dt3 = dt2 * dt
+        dt4 = dt3 * dt
+        dt5 = dt4 * dt
+
+        F = self.F
+        F[0, 1] = dt
+        F[0, 2] = 0.5 * dt2
+        F[1, 2] = dt
+
+        jerk = PROCESS_NOISE_JERK()
         Q = self.Q
-        Q[0, 0] = q_delay * dt3 / 3
-        Q[0, 1] = Q[1, 0] = q_delay * dt2 / 2
-        Q[1, 1] = q_delay * dt
-        Q[2, 2] = q_doppler * dt3 / 3
-        Q[2, 3] = Q[3, 2] = q_doppler * dt2 / 2
-        Q[3, 3] = q_doppler * dt
+        Q[0, 0] = jerk * dt5 / 20.0
+        Q[0, 1] = Q[1, 0] = jerk * dt4 / 8.0
+        Q[0, 2] = Q[2, 0] = jerk * dt3 / 6.0
+        Q[1, 1] = jerk * dt3 / 3.0
+        Q[1, 2] = Q[2, 1] = jerk * dt2 / 2.0
+        Q[2, 2] = jerk * dt
 
         state_pred = F @ state
         cov_pred = F @ covariance @ F.T + Q
 
-        # Floor the delay at 0; zero the rate only once the floor engages.  A
-        # negative delay-rate with a still-positive delay is a legitimately
+        # Floor the range at 0; zero the rate only once the floor engages.  A
+        # negative range rate with a still-positive range is a legitimately
         # approaching target and must NOT be clamped.
         if state_pred[0] < 0:
             state_pred[0] = 0.0
             if state_pred[1] < 0:
                 state_pred[1] = 0.0
 
-        return state_pred, cov_pred
+        return state_pred, _symmetrised(cov_pred)
 
     @staticmethod
     def measurement_noise_scale(snr):
@@ -100,7 +120,7 @@ class KalmanFilter:
         state_upd = state + K @ innovation
         cov_upd = (np.eye(self.dim_state) - K @ self.H) @ covariance
 
-        return state_upd, cov_upd
+        return state_upd, _symmetrised(cov_upd)
 
     def get_innovation_covariance(self, covariance, snr=None):
         S = self.H @ covariance @ self.H.T + self.R * self.measurement_noise_scale(snr)

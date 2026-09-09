@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 
 from retina_tracker.config import set_config
+from retina_tracker.kalman import range_rate_to_doppler
 from retina_tracker.tracker import BACKWARDS_RUN_BEFORE_RESYNC, Tracker
 
 NON_FINITE = [float("nan"), float("inf"), float("-inf")]
@@ -41,7 +42,7 @@ def build_config(**overrides):
             "gate_threshold": 9.0,
             "detection_window": 20,
         },
-        "process_noise": {"delay": 0.1, "doppler": 0.5},
+        "process_noise": {"range_jerk": 1e-7},
         "tracklet": {"max_delay_residual": 2.0, "max_doppler_residual": 10.0, "max_time_span": 3.0},
         "adsb": {
             "enabled": False,
@@ -65,10 +66,16 @@ def _tracker():
     return Tracker(config=config)
 
 
+def _drift_doppler(cadence_ms):
+    """The Doppler that matches a 0.2 km delay step at this cadence."""
+    return range_rate_to_doppler(0.2 / (cadence_ms / 1000.0))
+
+
 def _settled_tracker(n_frames=40, cadence_ms=1000):
     tracker = _tracker()
+    doppler = _drift_doppler(cadence_ms)
     for i in range(n_frames):
-        tracker.process_frame([_det(10.0 + 0.2 * i, -70.0 + 10.0 * i)], i * cadence_ms)
+        tracker.process_frame([_det(10.0 + 0.2 * i, doppler)], i * cadence_ms)
     return tracker
 
 
@@ -80,7 +87,10 @@ def _tentative_tracker(n_frames):
     """
     tracker = _tracker()
     for i in range(n_frames):
-        tracker.process_frame([_det(10.0 + 0.2 * i, -70.0 + 10.0 * i)], i * CADENCE_OUTSPANNING_TRACKLETS_MS)
+        tracker.process_frame(
+            [_det(10.0 + 0.2 * i, _drift_doppler(CADENCE_OUTSPANNING_TRACKLETS_MS))],
+            i * CADENCE_OUTSPANNING_TRACKLETS_MS,
+        )
     return tracker
 
 
@@ -104,7 +114,7 @@ class TestNonFiniteFrameCarryingDetections:
         track = tracker.tracks[0]
         assert track.id is None and track.n_frames == N_WINDOW - 1
 
-        tracker.process_frame([_det(10.0 + 0.2 * 19, -70.0 + 10.0 * 19)], timestamp)
+        tracker.process_frame([_det(10.0 + 0.2 * 19, _drift_doppler(1000))], timestamp)
 
         assert track.n_frames == N_WINDOW - 1, "the rejected frame must not advance the track"
 
@@ -114,8 +124,8 @@ class TestNonFiniteFrameCarryingDetections:
         tracker = _tentative_tracker(N_WINDOW - 1)
         track = tracker.tracks[0]
 
-        tracker.process_frame([_det(10.0 + 0.2 * 19, -70.0 + 10.0 * 19)], timestamp)
-        tracker.process_frame([_det(10.0 + 0.2 * 19, -70.0 + 10.0 * 19)], 19 * CADENCE_OUTSPANNING_TRACKLETS_MS)
+        tracker.process_frame([_det(10.0 + 0.2 * 19, _drift_doppler(1000))], timestamp)
+        tracker.process_frame([_det(10.0 + 0.2 * 19, _drift_doppler(1000))], 19 * CADENCE_OUTSPANNING_TRACKLETS_MS)
 
         assert track.id is not None
         assert "NAN" not in track.id.upper()
@@ -195,7 +205,7 @@ class TestClockResync:
         clamped = tracker.n_dt_clamped
 
         for i in range(1, 11):
-            tracker.process_frame([_det(18.0 + 0.2 * i, 320.0 + 10.0 * i)], base + i * 1000)
+            tracker.process_frame([_det(18.0 + 0.2 * i, _drift_doppler(1000))], base + i * 1000)
 
         assert tracker.last_timestamp == base + 10_000
         assert tracker.n_clock_resyncs == 1
@@ -210,7 +220,7 @@ class TestClockResync:
         base = tracker.last_timestamp
         tracker.process_frame([], base + 86_400_000)
         for i in range(1, 11):
-            tracker.process_frame([_det(18.0 + 0.2 * i, 320.0 + 10.0 * i)], base + i * 1000)
+            tracker.process_frame([_det(18.0 + 0.2 * i, _drift_doppler(1000))], base + i * 1000)
 
         track = next(t for t in tracker.tracks if t.n_missed == 0)
         assert track.n_associated >= 5, "the pinned track loses the target and the stream respawns it"
@@ -227,9 +237,9 @@ class TestClockResync:
         base = tracker.last_timestamp
 
         for i in range(1, 31):
-            tracker.process_frame([_det(18.0 + 0.2 * i, 320.0 + 10.0 * i)], base + i * 1000)
+            tracker.process_frame([_det(18.0 + 0.2 * i, _drift_doppler(1000))], base + i * 1000)
             assert tracker.n_backwards < BACKWARDS_RUN_BEFORE_RESYNC
-            tracker.process_frame([_det(60.0 + 0.2 * i, -300.0 + 10.0 * i)], base + 30_000 + i * 1000)
+            tracker.process_frame([_det(60.0 + 0.2 * i, _drift_doppler(1000))], base + 30_000 + i * 1000)
             assert tracker.n_backwards < BACKWARDS_RUN_BEFORE_RESYNC
 
         assert tracker.n_clock_resyncs == 0

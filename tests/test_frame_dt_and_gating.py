@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 
 from retina_tracker.config import set_config
+from retina_tracker.kalman import range_rate_to_doppler
 from retina_tracker.tracker import MAX_FRAME_DT_S, Tracker
 
 
@@ -35,7 +36,7 @@ def build_config():
             "gate_threshold": 9.0,
             "detection_window": 20,
         },
-        "process_noise": {"delay": 0.1, "doppler": 0.5},
+        "process_noise": {"range_jerk": 1e-7},
         "tracklet": {"max_delay_residual": 2.0, "max_doppler_residual": 10.0, "max_time_span": 3.0},
         "adsb": {
             "enabled": False,
@@ -216,7 +217,7 @@ def _make_negative_definite(track, snr=15.0):
     noise_scale = 1.0 / max(10 ** (snr / 10) / 10, 0.1)
     covariance = track.covariance.copy()
     covariance[0, 0] = -track.kf.R[0, 0] * noise_scale - 1.0
-    covariance[2, 2] = -track.kf.R[1, 1] * noise_scale - 1.0
+    covariance[1, 1] = -track.kf.R[1, 1] * noise_scale - 1.0
     track.covariance = covariance
 
     base = track.get_innovation_base()
@@ -251,7 +252,7 @@ class TestCorruptTrackTakesNothing:
         tracker = _settled_tracker()
         z = tracker.tracks[0].kf.H @ tracker.tracks[0].state
 
-        associations = tracker._associate([_det(float(z[0]), float(z[1]))])
+        associations = tracker._associate([_det(float(z[0]), range_rate_to_doppler(float(z[1])))])
 
         assert associations == [(0, 0)]
 
@@ -270,7 +271,7 @@ class TestCorruptTrackTakesNothing:
         healthy = tracker.tracks[0]
         _make_negative_definite(tracker.tracks[1])
         z = healthy.kf.H @ healthy.state
-        wanted = _det(float(z[0]), float(z[1]))
+        wanted = _det(float(z[0]), range_rate_to_doppler(float(z[1])))
 
         associations = tracker._associate([wanted])
 
@@ -279,22 +280,25 @@ class TestCorruptTrackTakesNothing:
 
 
 class TestGateStructuralInvariant:
-    """The gate omits the `d > 0` term of Sylvester's criterion, which is sound
-    only while S is diagonal. F, Q and H never couple the delay and Doppler
-    subspaces and both init paths are diagonal, so nothing else in the suite
-    would notice a change that coupled them and made the gate admit an
-    indefinite S again."""
+    """The gate tests `a > 0` and `det_S > 0`, which is the whole of Sylvester's
+    criterion for a symmetric 2x2 and so admits an off-diagonal S. Coupling
+    range to its rate makes S genuinely non-diagonal — a constant-acceleration
+    F correlates position with velocity — so symmetry, not diagonality, is what
+    the gate now depends on and what is pinned here."""
 
-    def test_the_covariance_stays_block_diagonal(self):
+    def test_the_covariance_stays_symmetric(self):
         tracker = _settled_tracker()
         for track in tracker.tracks:
-            for i, j in [(0, 2), (0, 3), (1, 2), (1, 3)]:
-                assert track.covariance[i, j] == 0.0
-                assert track.covariance[j, i] == 0.0
+            assert np.allclose(track.covariance, track.covariance.T, atol=0.0, rtol=0.0)
 
-    def test_the_innovation_base_therefore_has_no_off_diagonal(self):
+    def test_the_innovation_base_is_symmetric_and_positive_definite(self):
         tracker = _settled_tracker()
         for track in tracker.tracks:
             base = track.get_innovation_base()
-            assert base[0, 1] == 0.0
-            assert base[1, 0] == 0.0
+            assert base[0, 1] == base[1, 0]
+            assert base[0, 0] > 0.0
+            assert base[0, 0] * base[1, 1] - base[0, 1] * base[1, 0] > 0.0
+
+    def test_the_position_velocity_correlation_is_actually_present(self):
+        tracker = _settled_tracker()
+        assert any(track.covariance[0, 1] != 0.0 for track in tracker.tracks)

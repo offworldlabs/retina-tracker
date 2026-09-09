@@ -11,10 +11,15 @@ tracker:
   gate_threshold: 9.0     # Chi-squared gate (99% confidence)
   detection_window: 20    # Rolling detection window for streaming output
 
+# Radar geometry. center_frequency must match the node's blah2 capture.fc:
+# it sets the wavelength that converts Doppler into bistatic range rate, so a
+# wrong value biases every track's velocity by the same ratio.
+radar:
+  center_frequency: 177000000
+
 # Process noise (Kalman filter)
 process_noise:
-  delay: 0.1              # Delay process noise
-  doppler: 0.5            # Doppler process noise
+  range_jerk: 1.0e-7      # Bistatic range jerk PSD (km^2/s^5)
 
 # Tracklet initiation thresholds
 tracklet:

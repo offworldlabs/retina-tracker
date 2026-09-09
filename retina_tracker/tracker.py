@@ -16,7 +16,7 @@ from .config import (
     TRACKLET_MAX_TIME_SPAN,
     get_config,
 )
-from .kalman import KalmanFilter
+from .kalman import KalmanFilter, doppler_to_range_rate
 from .track import Track, TrackState
 
 MERGE_WINDOW_MS = 5000
@@ -217,7 +217,7 @@ class Tracker:
 
         # Pre-compute detection measurements as a single (n_dets, 2) array
         # to avoid creating n_tracks × n_dets individual numpy arrays.
-        det_z = np.array([[d["delay"], d["doppler"]] for d in detections])
+        det_z = np.array([[d["delay"], doppler_to_range_rate(d["doppler"])] for d in detections])
         det_snr = np.array([d.get("snr", 10.0) for d in detections])
         snr_weights = 20.0 / np.maximum(det_snr, 5.0)
         # Per-detection measurement-noise scale — the same model update()
@@ -332,8 +332,7 @@ class Tracker:
             ):
                 track.state_status = TrackState.ACTIVE
 
-                track.state[1] = delay_velocity
-                track.state[3] = doppler_velocity
+                track.state[2] = doppler_to_range_rate(doppler_velocity)
 
                 track.id = Track._generate_id(timestamp, adsb_hex=track.adsb_hex)
 
@@ -377,9 +376,9 @@ class Tracker:
                 start_state_b = track_b.history["states"][0]
 
                 delay_diff = abs(end_state_a[0] - start_state_b[0])
-                doppler_diff = abs(end_state_a[2] - start_state_b[2])
+                rate_diff = abs(end_state_a[1] - start_state_b[1])
 
-                if delay_diff < 5.0 and doppler_diff < 50.0:
+                if delay_diff < 5.0 and rate_diff < abs(doppler_to_range_rate(50.0)):
                     self._merge_track_pair(track_a, track_b)
                     merged_indices.add(j)
                     break
