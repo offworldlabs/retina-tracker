@@ -21,6 +21,7 @@ from .track import Track, TrackState
 
 MERGE_WINDOW_MS = 5000
 MAX_COMPLETED_TRACKS = 50
+UNBOUNDED_ARCHIVE = None
 MAX_FRAME_DT_S = 60.0
 BACKWARDS_RUN_BEFORE_RESYNC = 3
 
@@ -28,13 +29,11 @@ BACKWARDS_RUN_BEFORE_RESYNC = 3
 class Tracker:
     """Multi-target tracker using Kalman filtering and GNN data association."""
 
-    def __init__(self, event_writer=None, detection_window=20, config=None, max_completed_tracks=None):
+    def __init__(self, event_writer=None, detection_window=20, config=None, max_completed_tracks=MAX_COMPLETED_TRACKS):
         self.kf = KalmanFilter()
         self.tracks = []
         self.all_tracks = []
-        self.completed_tracks = deque(
-            maxlen=MAX_COMPLETED_TRACKS if max_completed_tracks is None else max_completed_tracks
-        )
+        self.completed_tracks = deque(maxlen=max_completed_tracks)
         self.last_timestamp = None
         self.detection_window = detection_window
         self._reset_counters()
