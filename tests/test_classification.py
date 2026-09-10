@@ -26,12 +26,14 @@ class RecordingSink:
         self.calls = []
 
     def write_detections(self, timestamp, associated, unassociated, below_snr):
-        self.calls.append({
-            "timestamp": timestamp,
-            "associated": associated,
-            "unassociated": unassociated,
-            "below_snr": below_snr,
-        })
+        self.calls.append(
+            {
+                "timestamp": timestamp,
+                "associated": associated,
+                "unassociated": unassociated,
+                "below_snr": below_snr,
+            }
+        )
 
     # Convenience views over everything released so far.
     def snrs(self, bucket):
@@ -56,12 +58,15 @@ def make_tracker(sink, **kwargs):
 
 def frame(tracker, timestamp, points):
     """points: list of (delay, doppler, snr)."""
-    process_streaming_frame(tracker, {
-        "timestamp": timestamp,
-        "delay": [p[0] for p in points],
-        "doppler": [p[1] for p in points],
-        "snr": [p[2] for p in points],
-    })
+    process_streaming_frame(
+        tracker,
+        {
+            "timestamp": timestamp,
+            "delay": [p[0] for p in points],
+            "doppler": [p[1] for p in points],
+            "snr": [p[2] for p in points],
+        },
+    )
 
 
 def steady_target(tracker, frames, delay=10.0, doppler=50.0, snr=15.0, start=1000, step=500):
@@ -85,6 +90,7 @@ def drain(tracker, start_ts=900000, max_frames=120):
 
 
 # ── the SNR gate ────────────────────────────────────────────────────────────
+
 
 def test_detections_below_the_gate_are_reported_not_discarded(sink):
     """The blind spot this exists to close."""
@@ -124,9 +130,11 @@ def test_every_detection_is_accounted_for(sink):
     tracker = make_tracker(sink)
     given = 0
     for i in range(12):
-        points = [(10.0 + i * 0.05, 50.0, min_snr + 8),
-                  (200.0, -100.0, min_snr - 2),
-                  (55.0 + i * 3.0, 20.0, min_snr + 1)]
+        points = [
+            (10.0 + i * 0.05, 50.0, min_snr + 8),
+            (200.0, -100.0, min_snr - 2),
+            (55.0 + i * 3.0, 20.0, min_snr + 1),
+        ]
         given += len(points)
         frame(tracker, 1000 + i * 500, points)
     drain(tracker)
@@ -136,6 +144,7 @@ def test_every_detection_is_accounted_for(sink):
 
 
 # ── when a verdict becomes final ────────────────────────────────────────────
+
 
 def test_a_detection_that_ends_up_in_a_confirmed_track_reads_associated(sink):
     tracker = make_tracker(sink)
@@ -192,6 +201,7 @@ def test_a_detection_joining_an_established_track_is_not_delayed(sink):
 
 # ── ordering and bounds ─────────────────────────────────────────────────────
 
+
 def test_a_rejected_detection_waits_for_its_frame(sink):
     """Deliberate. A below-gate detection's verdict is known the moment it
     arrives, but releasing it ahead of the rest of its frame would mean
@@ -214,8 +224,7 @@ def test_frames_are_released_in_order(sink):
     timestamp order, so an unsettled frame blocks rather than being skipped."""
     tracker = make_tracker(sink)
     for i in range(30):
-        frame(tracker, 1000 + i * 500, [(10.0 + i * 0.05, 50.0, 15.0),
-                                        (300.0 - i * 7.0, -150.0, 15.0)])
+        frame(tracker, 1000 + i * 500, [(10.0 + i * 0.05, 50.0, 15.0), (300.0 - i * 7.0, -150.0, 15.0)])
 
     assert sink.timestamps == sorted(sink.timestamps)
 
@@ -255,6 +264,7 @@ def test_reset_drops_anything_still_pending(sink):
 
 
 # ── cost when nobody is listening ───────────────────────────────────────────
+
 
 def test_no_sink_means_no_bookkeeping():
     """The CLI and any node without a consumer must not pay for this."""

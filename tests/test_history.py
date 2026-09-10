@@ -31,6 +31,7 @@ def history():
 
 # ── what it holds ───────────────────────────────────────────────────────────
 
+
 def test_detections_land_in_the_class_they_were_given(history):
     history.write_detections(BASE, [det(1.0)], [det(2.0)], [det(3.0)])
     payload, _ = history.snapshot()
@@ -48,23 +49,32 @@ def test_every_class_is_present_even_when_empty(history):
 
 
 def test_track_points_and_metadata_are_kept(history):
-    history.write_event("T1", BASE, 3, [track_det(BASE), track_det(BASE + 500)],
-                        adsb_hex="4CA2D1", is_anomalous=True,
-                        anomaly_types=["sustained_orbit"], max_velocity_ms=231.55,
-                        shadow_fraction=0.6432)
+    history.write_event(
+        "T1",
+        BASE,
+        3,
+        [track_det(BASE), track_det(BASE + 500)],
+        adsb_hex="4CA2D1",
+        is_anomalous=True,
+        anomaly_types=["sustained_orbit"],
+        max_velocity_ms=231.55,
+        shadow_fraction=0.6432,
+    )
     payload, _ = history.snapshot()
 
     assert payload["tracks"]["T1"]["t"] == [BASE, BASE + 500]
     assert payload["tracks"]["T1"]["meta"] == {
-        "adsb_hex": "4CA2D1", "length": 3, "max_velocity_ms": 231.6,
-        "is_anomalous": True, "anomaly_types": ["sustained_orbit"],
+        "adsb_hex": "4CA2D1",
+        "length": 3,
+        "max_velocity_ms": 231.6,
+        "is_anomalous": True,
+        "anomaly_types": ["sustained_orbit"],
         "shadow_fraction": 0.643,
     }
 
 
 def test_adsb_initialized_is_the_one_field_dropped_on_purpose(history):
-    history.write_event("T1", BASE, 1, [track_det(BASE)],
-                        adsb_initialized=True, something_new=7)
+    history.write_event("T1", BASE, 1, [track_det(BASE)], adsb_initialized=True, something_new=7)
     payload, _ = history.snapshot()
     assert "adsb_initialized" not in payload["tracks"]["T1"]["meta"]
     assert "something_new" not in payload["tracks"]["T1"]["meta"]
@@ -73,13 +83,13 @@ def test_adsb_initialized_is_the_one_field_dropped_on_purpose(history):
 def test_a_track_never_goes_backwards(history):
     """Every read relies on points being in timestamp order."""
     history.write_event("T1", BASE, 2, [track_det(BASE), track_det(BASE + 500)])
-    history.write_event("T1", BASE, 2, [track_det(BASE), track_det(BASE + 500),
-                                        track_det(BASE + 1000)])
+    history.write_event("T1", BASE, 2, [track_det(BASE), track_det(BASE + 500), track_det(BASE + 1000)])
     payload, _ = history.snapshot()
     assert payload["tracks"]["T1"]["t"] == [BASE, BASE + 500, BASE + 1000]
 
 
 # ── the wire form ───────────────────────────────────────────────────────────
+
 
 def test_values_are_rounded_to_the_precision_they_have(history):
     """float32 storage reads 16.1 back as 16.100000381469727, which is 18
@@ -119,6 +129,7 @@ def test_rounding_keeps_the_payload_compact(history):
 
 # ── the view window ─────────────────────────────────────────────────────────
 
+
 def test_a_window_narrows_what_is_served_without_touching_what_is_held(history):
     history.write_detections(BASE, [det(1.0)], [], [])
     history.write_detections(BASE + 100_000, [det(2.0)], [], [])
@@ -151,6 +162,7 @@ def test_the_cursor_covers_everything_not_just_the_window(history):
 
 # ── deltas ──────────────────────────────────────────────────────────────────
 
+
 def test_since_returns_only_what_was_appended(history):
     history.write_detections(BASE, [det(1.0)], [], [])
     _, cursor = history.snapshot()
@@ -177,8 +189,7 @@ def test_since_sends_a_track_the_cursor_has_never_seen_whole(history):
     """A track promoted after the consumer connected arrives with the
     history the tracker backfilled, not truncated at the join."""
     _, cursor = history.snapshot()
-    history.write_event("T1", BASE, 3, [track_det(BASE), track_det(BASE + 500),
-                                        track_det(BASE + 1000)])
+    history.write_event("T1", BASE, 3, [track_det(BASE), track_det(BASE + 500), track_det(BASE + 1000)])
 
     delta, _ = history.since(cursor)
     assert delta["tracks"]["T1"]["t"] == [BASE, BASE + 500, BASE + 1000]
@@ -230,6 +241,7 @@ def test_a_fresh_snapshot_works_again_after_a_clear(history):
 
 
 # ── bounds ──────────────────────────────────────────────────────────────────
+
 
 def test_pruning_drops_what_is_older_than_the_window():
     h = DetectionHistory(window_s=10)

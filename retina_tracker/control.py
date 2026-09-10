@@ -53,8 +53,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     # The default handler logs every request to stderr. A health check on a
     # short interval would bury the tracker's own output, which is the only
-    # thing anyone reads that stream for.
-    def log_message(self, fmt, *args):
+    # thing anyone reads that stream for. The base class calls this
+    # positionally, so *args covers the format string too.
+    def log_message(self, *args):
         pass
 
     def _send(self, status, payload):
@@ -209,8 +210,7 @@ class ControlServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT,
-                 history=None):
+    def __init__(self, tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT, history=None):
         super().__init__((host, port), _Handler)
         self.tracker = tracker
         self.tracker_lock = tracker_lock
@@ -236,15 +236,13 @@ def _has_points(delta):
     return any(cols["t"] for cols in delta["detections"].values())
 
 
-def start_control_server(tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT,
-                         history=None):
+def start_control_server(tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT, history=None):
     """Serve the control surface on a daemon thread and return the server.
 
     The thread is a daemon so it never holds up interpreter shutdown: the
     tracker process is killed by its supervisor, not asked to wind down."""
     server = ControlServer(tracker, tracker_lock, host=host, port=port, history=history)
-    thread = threading.Thread(target=server.serve_forever, daemon=True,
-                              name="tracker-control")
+    thread = threading.Thread(target=server.serve_forever, daemon=True, name="tracker-control")
     thread.start()
     server.thread = thread
     return server

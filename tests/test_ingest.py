@@ -41,8 +41,7 @@ def feed():
     tracker = Tracker(config=get_config())
     lock = threading.Lock()
     stop = threading.Event()
-    thread = threading.Thread(
-        target=serve_detections, args=(server, tracker, lock, stop), daemon=True)
+    thread = threading.Thread(target=serve_detections, args=(server, tracker, lock, stop), daemon=True)
     thread.start()
     try:
         yield tracker, port
@@ -178,12 +177,15 @@ def test_a_reconnect_after_a_clean_close_is_served(feed):
         again.close()
 
 
-@pytest.mark.parametrize("junk", [
-    b"not json at all\n",
-    b"[1, 2, 3]\n",                      # valid JSON, not an object
-    b'{"delay": [1.0]}\n',               # object, but no timestamp
-    b'{"timestamp": "nonsense"}\n',      # timestamp of the wrong type
-])
+@pytest.mark.parametrize(
+    "junk",
+    [
+        b"not json at all\n",
+        b"[1, 2, 3]\n",  # valid JSON, not an object
+        b'{"delay": [1.0]}\n',  # object, but no timestamp
+        b'{"timestamp": "nonsense"}\n',  # timestamp of the wrong type
+    ],
+)
 def test_a_malformed_frame_does_not_take_the_feed_down(feed, junk):
     """One bad line used to be able to end detection ingest until the
     container was restarted."""

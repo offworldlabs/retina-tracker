@@ -151,6 +151,7 @@ def test_reset_waits_for_an_in_flight_frame(served):
 
 # ── The data stream ─────────────────────────────────────────────────────────
 
+
 def read_events(response, count, timeout=10):
     """Pull `count` SSE messages off an open stream."""
     events = []
@@ -180,8 +181,7 @@ def streaming(monkeypatch):
     tracker = Tracker(config=get_config())
     history = DetectionHistory()
     lock = threading.Lock()
-    server = start_control_server(tracker, lock, host="127.0.0.1", port=0,
-                                 history=history)
+    server = start_control_server(tracker, lock, host="127.0.0.1", port=0, history=history)
     try:
         yield history, f"http://127.0.0.1:{server.port}"
     finally:
@@ -226,10 +226,12 @@ def test_all_three_classes_reach_a_consumer(streaming):
     history, base = streaming
     with open_stream(base) as response:
         read_events(response, 1)
-        history.write_detections(1000,
-                                 [{"delay": 1.0, "doppler": 0.0, "snr": 15.0}],
-                                 [{"delay": 2.0, "doppler": 0.0, "snr": 9.0}],
-                                 [{"delay": 3.0, "doppler": 0.0, "snr": 2.0}])
+        history.write_detections(
+            1000,
+            [{"delay": 1.0, "doppler": 0.0, "snr": 15.0}],
+            [{"delay": 2.0, "doppler": 0.0, "snr": 9.0}],
+            [{"delay": 3.0, "doppler": 0.0, "snr": 2.0}],
+        )
         _kind, payload = read_events(response, 1)[0]
 
     assert payload["detections"]["associated"]["delay"] == [1.0]
@@ -282,7 +284,7 @@ def test_the_stream_is_unavailable_without_a_history(served):
 
 
 def test_history_clear_wipes_the_record_without_touching_the_tracker(streaming):
-    """"Clear buffer" has always meant "clear what I am shown, keep
+    """ "Clear buffer" has always meant "clear what I am shown, keep
     tracking". That distinction survives the record moving into the tracker."""
     history, base = streaming
     history.write_detections(1000, [{"delay": 10.0, "doppler": 50.0, "snr": 15.0}], [], [])

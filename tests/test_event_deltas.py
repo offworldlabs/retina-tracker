@@ -22,8 +22,13 @@ BASE_TS = 1718747745000
 
 
 def detection(i):
-    return {"timestamp": BASE_TS + i * 500, "delay": 16.1 + i * 0.01,
-            "doppler": 134.5 - i * 0.2, "snr": 16.2, "adsb": None}
+    return {
+        "timestamp": BASE_TS + i * 500,
+        "delay": 16.1 + i * 0.01,
+        "doppler": 134.5 - i * 0.2,
+        "snr": 16.2,
+        "adsb": None,
+    }
 
 
 def rolling_window(upto, size=20):
@@ -41,8 +46,7 @@ def emit_track_life(writer, track_id, points, window=20, **meta):
     """One event per point, each carrying the rolling window, as the tracker
     does for a track that is associated on every frame."""
     for n in range(1, points + 1):
-        writer.write_event(track_id, BASE_TS + n * 500, n,
-                           rolling_window(n, window), **meta)
+        writer.write_event(track_id, BASE_TS + n * 500, n, rolling_window(n, window), **meta)
 
 
 def test_the_first_event_for_a_track_carries_everything_it_has(tmp_path):
@@ -51,8 +55,7 @@ def test_the_first_event_for_a_track_carries_everything_it_has(tmp_path):
     writer.write_event("T1", BASE_TS, 3, rolling_window(3))
     writer.close()
 
-    assert [d["timestamp"] for d in read_events(path)[0]["detections"]] == \
-        [BASE_TS, BASE_TS + 500, BASE_TS + 1000]
+    assert [d["timestamp"] for d in read_events(path)[0]["detections"]] == [BASE_TS, BASE_TS + 500, BASE_TS + 1000]
 
 
 def test_later_events_carry_only_what_is_new(tmp_path):
@@ -76,8 +79,7 @@ def test_an_event_is_still_written_when_nothing_is_new(tmp_path):
     path = tmp_path / "events.jsonl"
     writer = TrackEventWriter(str(path), max_bytes=0)
     writer.write_event("T1", BASE_TS, 1, rolling_window(1), is_anomalous=False)
-    writer.write_event("T1", BASE_TS + 10, 1, rolling_window(1),
-                       is_anomalous=True, anomaly_types=["sustained_orbit"])
+    writer.write_event("T1", BASE_TS + 10, 1, rolling_window(1), is_anomalous=True, anomaly_types=["sustained_orbit"])
     writer.close()
 
     events = read_events(path)
@@ -112,12 +114,23 @@ def test_live_score_reconstructs_the_same_history(tmp_path):
     repeat_path = tmp_path / "repeat.jsonl"
     with open(repeat_path, "w") as f:
         for n in range(1, 51):
-            f.write(json.dumps({
-                "track_id": "T1", "adsb_hex": "4CA2D1", "adsb_initialized": False,
-                "timestamp": BASE_TS + n * 500, "length": n,
-                "detections": rolling_window(n), "is_anomalous": False,
-                "max_velocity_ms": 0.0, "anomaly_types": [], "shadow_fraction": 0.25,
-            }) + "\n")
+            f.write(
+                json.dumps(
+                    {
+                        "track_id": "T1",
+                        "adsb_hex": "4CA2D1",
+                        "adsb_initialized": False,
+                        "timestamp": BASE_TS + n * 500,
+                        "length": n,
+                        "detections": rolling_window(n),
+                        "is_anomalous": False,
+                        "max_velocity_ms": 0.0,
+                        "anomaly_types": [],
+                        "shadow_fraction": 0.25,
+                    }
+                )
+                + "\n"
+            )
 
     delta = load_tracks(str(delta_path))
     repeat = load_tracks(str(repeat_path))
@@ -156,8 +169,7 @@ def test_the_file_is_dramatically_smaller(tmp_path):
     writer.close()
 
     repeat_bytes = sum(
-        len(json.dumps({"track_id": "T1", "detections": rolling_window(n)}) + "\n")
-        for n in range(1, 51)
+        len(json.dumps({"track_id": "T1", "detections": rolling_window(n)}) + "\n") for n in range(1, 51)
     )
     delta_bytes = delta_path.stat().st_size
     # Conservative: the delta file still carries per-event metadata the
@@ -200,5 +212,4 @@ def test_reconstruction_holds_at_any_window_size(tmp_path, window):
     writer.close()
 
     tracks = load_tracks(str(path))
-    assert [d["timestamp"] for d in tracks["T1"]["detections"]] == \
-        [BASE_TS + i * 500 for i in range(25)]
+    assert [d["timestamp"] for d in tracks["T1"]["detections"]] == [BASE_TS + i * 500 for i in range(25)]

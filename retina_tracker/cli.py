@@ -205,19 +205,30 @@ def main():
     parser.add_argument("--tcp", action="store_true", help="Run as TCP server for streaming input from blah2")
     parser.add_argument("--tcp-host", default="0.0.0.0", help="TCP bind address (default: 0.0.0.0)")
     parser.add_argument("--tcp-port", type=int, default=3012, help="TCP port to listen on (default: 3012)")
-    parser.add_argument("--control-host", default="127.0.0.1",
-                        help="HTTP control surface bind address (default: 127.0.0.1). "
-                             "Loopback by default because the container runs with "
-                             "network_mode host, where 0.0.0.0 would publish it on the LAN.")
-    parser.add_argument("--control-port", type=int, default=30101,
-                        help="HTTP control surface port (default: 30101). 0 disables it.")
-    parser.add_argument("--history-window", type=int, default=4 * 3600,
-                        help="Seconds of detections and tracks kept in memory for "
-                             "GET /events (default: 14400, four hours).")
-    parser.add_argument("--history-max-points", type=int, default=500_000,
-                        help="Hard ceiling on points held per detection class, so the "
-                             "footprint stays predictable whatever the detection rate "
-                             "(default: 500000, about 10 MB per class).")
+    parser.add_argument(
+        "--control-host",
+        default="127.0.0.1",
+        help="HTTP control surface bind address (default: 127.0.0.1). "
+        "Loopback by default because the container runs with "
+        "network_mode host, where 0.0.0.0 would publish it on the LAN.",
+    )
+    parser.add_argument(
+        "--control-port", type=int, default=30101, help="HTTP control surface port (default: 30101). 0 disables it."
+    )
+    parser.add_argument(
+        "--history-window",
+        type=int,
+        default=4 * 3600,
+        help="Seconds of detections and tracks kept in memory for GET /events (default: 14400, four hours).",
+    )
+    parser.add_argument(
+        "--history-max-points",
+        type=int,
+        default=500_000,
+        help="Hard ceiling on points held per detection class, so the "
+        "footprint stays predictable whatever the detection rate "
+        "(default: 500000, about 10 MB per class).",
+    )
 
     args = parser.parse_args()
 

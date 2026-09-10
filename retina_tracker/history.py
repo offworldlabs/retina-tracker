@@ -69,8 +69,7 @@ SNR_DP = 1
 
 def _columns():
     """One point-set. 'q' is 8 bytes, 'f' is 4: 20 bytes a point."""
-    return {"t": array("q"), "delay": array("f"),
-            "doppler": array("f"), "snr": array("f")}
+    return {"t": array("q"), "delay": array("f"), "doppler": array("f"), "snr": array("f")}
 
 
 def _append(cols, timestamp, delay, doppler, snr):
@@ -124,10 +123,10 @@ class DetectionHistory:
         self._det = {name: _columns() for name in CLASSES}
         self._det_dropped = dict.fromkeys(CLASSES, 0)
 
-        self._tracks = {}          # id -> columns
-        self._track_meta = {}      # id -> what the tracker thinks of it
-        self._track_dropped = {}   # id -> points dropped from the front
-        self._track_last_ts = {}   # id -> newest timestamp held
+        self._tracks = {}  # id -> columns
+        self._track_meta = {}  # id -> what the tracker thinks of it
+        self._track_dropped = {}  # id -> points dropped from the front
+        self._track_last_ts = {}  # id -> newest timestamp held
 
         self._gen = 0
 
@@ -137,18 +136,25 @@ class DetectionHistory:
         """The tracker's detection sink. One call per frame, in frame order,
         with each detection's classification already final."""
         with self._lock:
-            for name, dets in ((ASSOCIATED, associated),
-                               (UNASSOCIATED, unassociated),
-                               (BELOW_SNR, below_snr)):
+            for name, dets in ((ASSOCIATED, associated), (UNASSOCIATED, unassociated), (BELOW_SNR, below_snr)):
                 cols = self._det[name]
                 for det in dets:
-                    _append(cols, timestamp, det["delay"], det["doppler"],
-                            det.get("snr", 0.0))
+                    _append(cols, timestamp, det["delay"], det["doppler"], det.get("snr", 0.0))
                 self._enforce_ceiling(name)
 
-    def write_event(self, track_id, timestamp, length, detections,
-                    adsb_hex=None, is_anomalous=False, anomaly_types=None,
-                    max_velocity_ms=0.0, shadow_fraction=0.0, **_unused):
+    def write_event(
+        self,
+        track_id,
+        timestamp,
+        length,
+        detections,
+        adsb_hex=None,
+        is_anomalous=False,
+        anomaly_types=None,
+        max_velocity_ms=0.0,
+        shadow_fraction=0.0,
+        **_unused,
+    ):
         """The tracker's event-writer duck type.
 
         Named keywords rather than **kwargs so it is visible which of the
@@ -250,14 +256,8 @@ class DetectionHistory:
         """Caller holds the lock."""
         return {
             "gen": self._gen,
-            "detections": {
-                name: self._det_dropped[name] + len(self._det[name]["t"])
-                for name in CLASSES
-            },
-            "tracks": {
-                tid: self._track_dropped.get(tid, 0) + len(cols["t"])
-                for tid, cols in self._tracks.items()
-            },
+            "detections": {name: self._det_dropped[name] + len(self._det[name]["t"]) for name in CLASSES},
+            "tracks": {tid: self._track_dropped.get(tid, 0) + len(cols["t"]) for tid, cols in self._tracks.items()},
         }
 
     def cursor(self):
@@ -382,6 +382,7 @@ def start_pruner(history, interval_s=60, stop_event=None):
     arriving: a node that stops receiving should still let its window empty
     rather than holding four hours of stale points indefinitely.
     """
+
     def loop():
         while True:
             if stop_event is not None:

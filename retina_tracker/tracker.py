@@ -41,9 +41,15 @@ MAX_PENDING_CLASSIFICATION_FRAMES = 60
 class Tracker:
     """Multi-target tracker using Kalman filtering and GNN data association."""
 
-    def __init__(self, event_writer=None, detection_window=20, config=None,
-                 max_completed_tracks=MAX_COMPLETED_TRACKS, detection_sink=None,
-                 max_pending_classification_frames=MAX_PENDING_CLASSIFICATION_FRAMES):
+    def __init__(
+        self,
+        event_writer=None,
+        detection_window=20,
+        config=None,
+        max_completed_tracks=MAX_COMPLETED_TRACKS,
+        detection_sink=None,
+        max_pending_classification_frames=MAX_PENDING_CLASSIFICATION_FRAMES,
+    ):
         self.kf = KalmanFilter()
         self.tracks = []
         self.all_tracks = []
@@ -293,12 +299,14 @@ class Tracker:
         entries are only ever released from the front, so a consumer can
         append what it receives and rely on it being ordered by timestamp.
         """
-        self._pending_classification.append({
-            "timestamp": timestamp,
-            "frame": self.frame_count,
-            "pairs": [(det, landed_in[i]) for i, det in enumerate(detections) if i in landed_in],
-            "below_snr": below_snr,
-        })
+        self._pending_classification.append(
+            {
+                "timestamp": timestamp,
+                "frame": self.frame_count,
+                "pairs": [(det, landed_in[i]) for i, det in enumerate(detections) if i in landed_in],
+                "below_snr": below_snr,
+            }
+        )
         self._drain_classifications()
 
     def _drain_classifications(self):
@@ -326,9 +334,7 @@ class Tracker:
         while self._pending_classification:
             entry = self._pending_classification[0]
             aged_out = (self.frame_count - entry["frame"]) >= self._max_pending_frames
-            if not aged_out and any(
-                    not (track.ever_confirmed or track.retired)
-                    for _det, track in entry["pairs"]):
+            if not aged_out and any(not (track.ever_confirmed or track.retired) for _det, track in entry["pairs"]):
                 break
 
             associated = []
@@ -339,8 +345,7 @@ class Tracker:
                 (associated if track.ever_confirmed else unassociated).append(det)
 
             self._pending_classification.popleft()
-            self.detection_sink.write_detections(
-                entry["timestamp"], associated, unassociated, entry["below_snr"])
+            self.detection_sink.write_detections(entry["timestamp"], associated, unassociated, entry["below_snr"])
 
     def _associate(self, detections):
         if not self.tracks or not detections:

@@ -160,9 +160,17 @@ def serve_detections(server, tracker, tracker_lock, stop_event=None):
     _close(conn)
 
 
-def run_tcp_server(host="0.0.0.0", port=3012, event_writer=None, detection_window=20,
-                   config=None, control_host=CONTROL_HOST, control_port=CONTROL_PORT,
-                   history_window_s=WINDOW_S, history_max_points=MAX_POINTS):
+def run_tcp_server(
+    host="0.0.0.0",
+    port=3012,
+    event_writer=None,
+    detection_window=20,
+    config=None,
+    control_host=CONTROL_HOST,
+    control_port=CONTROL_PORT,
+    history_window_s=WINDOW_S,
+    history_max_points=MAX_POINTS,
+):
     """Run tracker as TCP server receiving detection frames from blah2.
 
     Args:
@@ -178,8 +186,7 @@ def run_tcp_server(host="0.0.0.0", port=3012, event_writer=None, detection_windo
     """
     # In memory rather than on disk: it does not need to survive a restart,
     # and the alternative was several hundred megabytes a day onto an SD card.
-    history = DetectionHistory(window_s=history_window_s,
-                               max_points=history_max_points)
+    history = DetectionHistory(window_s=history_window_s, max_points=history_max_points)
 
     tracker = Tracker(
         # The file's writer deduplicates detections, so it goes first and the
@@ -197,9 +204,7 @@ def run_tcp_server(host="0.0.0.0", port=3012, event_writer=None, detection_windo
     tracker_lock = threading.Lock()
 
     if control_port:
-        control = start_control_server(tracker, tracker_lock,
-                                       host=control_host, port=control_port,
-                                       history=history)
+        control = start_control_server(tracker, tracker_lock, host=control_host, port=control_port, history=history)
         print(f"Tracker control on {control_host}:{control.port}", file=sys.stderr)
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
