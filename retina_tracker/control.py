@@ -66,6 +66,18 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
+        if self._route() == "/history/clear":
+            # Wipes the record without touching the tracker. The page's
+            # "Clear buffer" has always meant "clear what I am being shown,
+            # keep tracking", and that distinction survives the record moving
+            # here from retina-gui. An active track repopulates on its own
+            # within a few events.
+            if self.server.history is None:
+                self._send(503, {"error": "history not enabled"})
+                return
+            self.server.history.clear()
+            self._send(200, {"ok": True})
+            return
         if self._route() == "/reset":
             # Held for the duration, so a 200 means the tracker is already
             # clear rather than scheduled to be. A caller that resets between
@@ -131,7 +143,14 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Accel-Buffering", "no")
-        # No length is knowable, and this never ends of its own accord.
+        # Chunked, not "read until the connection closes". No length is
+        # knowable and this never ends of its own accord, so a client told
+        # only "Connection: close" has to read to EOF to find a message
+        # boundary — which for urllib3, and therefore for retina-gui's
+        # requests-based proxy, means blocking until the read timeout rather
+        # than delivering each event as it arrives. Framing every message as
+        # its own chunk is what makes it stream to any client.
+        self.send_header("Transfer-Encoding", "chunked")
         self.send_header("Connection", "close")
         self.end_headers()
 
@@ -158,15 +177,18 @@ class _Handler(BaseHTTPRequestHandler):
                     self._event("delta", delta)
                     last_sent = time.monotonic()
                 elif time.monotonic() - last_sent >= HEARTBEAT_S:
-                    self.wfile.write(b": keepalive\n\n")
-                    self.wfile.flush()
+                    self._chunk(b": keepalive\n\n")
                     last_sent = time.monotonic()
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass  # the consumer went away, which is how a stream ends
 
     def _event(self, kind, payload):
         body = json.dumps(payload, separators=(",", ":"))
-        self.wfile.write(f"event: {kind}\ndata: {body}\n\n".encode())
+        self._chunk(f"event: {kind}\ndata: {body}\n\n".encode())
+
+    def _chunk(self, data):
+        """One HTTP/1.1 chunk, so each message is its own frame on the wire."""
+        self.wfile.write(b"%X\r\n" % len(data) + data + b"\r\n")
         self.wfile.flush()
 
     def _route(self):

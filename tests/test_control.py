@@ -279,3 +279,20 @@ def test_the_stream_is_unavailable_without_a_history(served):
     status, body = request(base + "/events")
     assert status == 503
     assert "error" in body
+
+
+def test_history_clear_wipes_the_record_without_touching_the_tracker(streaming):
+    """"Clear buffer" has always meant "clear what I am shown, keep
+    tracking". That distinction survives the record moving into the tracker."""
+    history, base = streaming
+    history.write_detections(1000, [{"delay": 10.0, "doppler": 50.0, "snr": 15.0}], [], [])
+
+    status, body = request(base + "/history/clear", method="POST")
+
+    assert status == 200 and body == {"ok": True}
+    assert history.stats()["points"] == 0
+
+
+def test_history_clear_is_unavailable_without_a_history(served):
+    _tracker, _lock, base = served
+    assert request(base + "/history/clear", method="POST")[0] == 503
