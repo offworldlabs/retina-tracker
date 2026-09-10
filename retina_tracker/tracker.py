@@ -29,10 +29,21 @@ MAX_FRAME_DT_S = 60.0
 BACKWARDS_RUN_BEFORE_RESYNC = 3
 
 
+# How long a frame's detections may wait for their tracks to resolve before
+# the answer is forced. Nearly every detection resolves far sooner: one joining
+# an already-confirmed track is settled on arrival, and a new track either
+# promotes within N_WINDOW frames or is deleted. This exists for the case that
+# does neither, a tentative track that keeps associating but never clears
+# promotion, which would otherwise hold up the whole queue behind it.
+MAX_PENDING_CLASSIFICATION_FRAMES = 60
+
+
 class Tracker:
     """Multi-target tracker using Kalman filtering and GNN data association."""
 
-    def __init__(self, event_writer=None, detection_window=20, config=None, max_completed_tracks=MAX_COMPLETED_TRACKS):
+    def __init__(self, event_writer=None, detection_window=20, config=None,
+                 max_completed_tracks=MAX_COMPLETED_TRACKS, detection_sink=None,
+                 max_pending_classification_frames=MAX_PENDING_CLASSIFICATION_FRAMES):
         self.kf = KalmanFilter()
         self.tracks = []
         self.all_tracks = []
@@ -42,6 +53,12 @@ class Tracker:
         self._reset_counters()
         self.event_writer = event_writer
         self.config = config if config else get_config()
+        # Optional. Receives every detection this tracker was given, classified
+        # (see _drain_classifications). None costs nothing: the bookkeeping is
+        # skipped entirely rather than computed and dropped.
+        self.detection_sink = detection_sink
+        self._max_pending_frames = max_pending_classification_frames
+        self._pending_classification = deque()
 
     def reset(self):
         """Clear in-progress and completed-track state in place, as if
@@ -58,6 +75,7 @@ class Tracker:
         self.all_tracks = []
         self.completed_tracks.clear()
         self.last_timestamp = None
+        self._pending_classification.clear()
         self._reset_counters()
 
     def _reset_counters(self):
@@ -112,7 +130,19 @@ class Tracker:
         else:
             dt = 0.5
 
-        detections = [d for d in detections if d["snr"] >= MIN_SNR()]
+        # A partition, not a filter. Everything below the gate used to be
+        # dropped here without trace, which is why nothing downstream could
+        # tell "the tracker rejected what it saw" from "there was nothing to
+        # see". A single loop rather than two comprehensions so that every
+        # detection lands in exactly one bucket even when snr is NaN, which
+        # fails both comparisons.
+        min_snr = MIN_SNR()
+        below_snr = []
+        kept = []
+        for d in detections:
+            (kept if d["snr"] >= min_snr else below_snr).append(d)
+        detections = kept
+
         self._mark_shadows(detections)
 
         for track in self.tracks:
@@ -122,6 +152,11 @@ class Tracker:
 
         associated_tracks = set()
         associated_detections = set()
+        # detection index -> the Track it went into, for classification.
+        # Every surviving detection ends up in some track: either an existing
+        # one associates it, or it starts a tentative one below. The question
+        # a consumer actually has is whether that track was ever confirmed.
+        landed_in = {} if self.detection_sink is not None else None
 
         _lazy_write = hasattr(self.event_writer, "write_event_lazy") if self.event_writer else False
 
@@ -133,6 +168,8 @@ class Tracker:
                 track.state_status = TrackState.ACTIVE
             associated_tracks.add(track_idx)
             associated_detections.add(det_idx)
+            if landed_in is not None:
+                landed_in[det_idx] = track
 
             if track.id and self.event_writer:
                 _det_n = min(track.n_associated, self.detection_window)
@@ -206,11 +243,17 @@ class Tracker:
             if i not in associated_detections:
                 new_track = Track(det, timestamp, self.kf, frame=self.frame_count, config=self.config)
                 self.tracks.append(new_track)
+                if landed_in is not None:
+                    landed_in[i] = new_track
 
         self._initiate_tracklets(timestamp)
 
         deleted_tracks = [t for t in self.tracks if t.should_delete()]
         for track in deleted_tracks:
+            # Latched here rather than inferred from absence later: this is
+            # what makes "never confirmed" a settled answer instead of a
+            # not-yet.
+            track.retired = True
             if track.state_status == TrackState.ACTIVE or track.n_associated >= M_THRESHOLD():
                 self.all_tracks.append(track)
         self.tracks = [t for t in self.tracks if not t.should_delete()]
@@ -231,12 +274,73 @@ class Tracker:
         if len(self.all_tracks) > 1:
             self._merge_tracks()
 
+        # After deletions and promotions, so this frame's own tracks may
+        # already have settled.
+        if self.detection_sink is not None:
+            self._classify_frame(timestamp, landed_in, detections, below_snr)
+
         resync = self.n_backwards >= BACKWARDS_RUN_BEFORE_RESYNC
         if self.last_timestamp is None or timestamp > self.last_timestamp or resync:
             if resync:
                 self.n_clock_resyncs += 1
                 self.n_backwards = 0
             self.last_timestamp = timestamp
+
+    def _classify_frame(self, timestamp, landed_in, detections, below_snr):
+        """Queue one frame's detections for classification, then drain.
+
+        Splitting queue from drain is what keeps the stream in frame order:
+        entries are only ever released from the front, so a consumer can
+        append what it receives and rely on it being ordered by timestamp.
+        """
+        self._pending_classification.append({
+            "timestamp": timestamp,
+            "frame": self.frame_count,
+            "pairs": [(det, landed_in[i]) for i, det in enumerate(detections) if i in landed_in],
+            "below_snr": below_snr,
+        })
+        self._drain_classifications()
+
+    def _drain_classifications(self):
+        """Release every frame at the front whose verdict is settled.
+
+        "Associated" means the detection ended up in a track that was
+        confirmed, which is not knowable when the detection arrives: a
+        detection that starts a tentative track is unassociated at that
+        moment and becomes associated a few frames later if the track
+        promotes. Classifying on arrival would therefore be wrong for
+        exactly the detections that matter most.
+
+        So a frame waits until each of its tracks has settled — promoted
+        (ever_confirmed) or deleted without promoting (retired) — and is then
+        released with a final answer. A detection joining an already-confirmed
+        track settles immediately, so a steady-state feed is not delayed at
+        all; it is only the opening frames of a new track that wait.
+
+        Stopping at the first unsettled frame rather than skipping past it is
+        deliberate. Out-of-order release would break the one assumption a
+        consumer buffering these wants to make.
+        """
+        if self.detection_sink is None:
+            return
+        while self._pending_classification:
+            entry = self._pending_classification[0]
+            aged_out = (self.frame_count - entry["frame"]) >= self._max_pending_frames
+            if not aged_out and any(
+                    not (track.ever_confirmed or track.retired)
+                    for _det, track in entry["pairs"]):
+                break
+
+            associated = []
+            unassociated = []
+            for det, track in entry["pairs"]:
+                # On an aged-out frame a still-tentative track reads as
+                # unassociated, which is the true answer so far.
+                (associated if track.ever_confirmed else unassociated).append(det)
+
+            self._pending_classification.popleft()
+            self.detection_sink.write_detections(
+                entry["timestamp"], associated, unassociated, entry["below_snr"])
 
     def _associate(self, detections):
         if not self.tracks or not detections:
