@@ -13,6 +13,7 @@ that is what the `get_recent_detections` cases below pin down.
 """
 
 from retina_tracker.config import get_config
+from retina_tracker.kalman import range_rate_to_doppler
 from retina_tracker.track import TRACK_HISTORY_MAX
 from retina_tracker.tracker import MAX_COMPLETED_TRACKS, Tracker
 
@@ -23,8 +24,15 @@ def make_detections(delay, doppler, snr=20.0):
     return [{"delay": delay, "doppler": doppler, "snr": snr}]
 
 
-def run_frames(tracker, n_frames, start_ts=0, delay=10.0, doppler=50.0, step=0.05, dt_ms=1000):
-    """Feed one steadily-drifting target for n_frames, returning the last ts."""
+def run_frames(tracker, n_frames, start_ts=0, delay=10.0, doppler=None, step=0.05, dt_ms=1000):
+    """Feed one steadily-drifting target for n_frames, returning the last ts.
+
+    Doppler defaults to the range rate the delay steps actually describe. A
+    constant Doppler beside a drifting delay is a target closing and receding
+    at once, which the filter now rejects because Doppler is the range rate.
+    """
+    if doppler is None:
+        doppler = range_rate_to_doppler(step / (dt_ms / 1000.0))
     ts = start_ts
     for i in range(n_frames):
         tracker.process_frame(make_detections(delay + i * step, doppler), ts)

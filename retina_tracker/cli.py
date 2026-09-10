@@ -16,7 +16,7 @@ from .config import (
 )
 from .output import TrackEventWriter
 from .server import run_tcp_server
-from .tracker import Tracker
+from .tracker import UNBOUNDED_ARCHIVE, Tracker
 
 
 def load_detections(filepath):
@@ -55,7 +55,12 @@ def process_detections(detections_file, event_writer=None, detection_window=20):
     detection_frames = load_detections(detections_file)
     print(f"Loaded {len(detection_frames)} detection frames", file=output)
 
-    tracker = Tracker(event_writer=event_writer, detection_window=detection_window, config=get_config())
+    tracker = Tracker(
+        event_writer=event_writer,
+        detection_window=detection_window,
+        config=get_config(),
+        max_completed_tracks=UNBOUNDED_ARCHIVE,
+    )
 
     for i, frame in enumerate(detection_frames):
         timestamp = frame["timestamp"]

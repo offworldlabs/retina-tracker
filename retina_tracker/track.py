@@ -10,6 +10,7 @@ from . import geometry
 from .config import (
     ALTITUDE_JUMP_THRESHOLD_FT,
     ANOMALOUS_ACCEL_MS2,
+    INITIAL_RANGE_ACCEL_VARIANCE,
     KNOTS_TO_MS,
     LONG_HOVER_MIN_DURATION_S,
     LONG_HOVER_POSITION_EPSILON_DEG,
@@ -17,17 +18,25 @@ from .config import (
     MACH_1_MS,
     MAX_DIRECTION_CHANGE_DEG_PER_SEC,
     MAX_NORMAL_ACCEL_MS2,
+    MEASUREMENT_NOISE_DELAY,
+    MEASUREMENT_NOISE_DOPPLER,
     N_COAST,
     N_DELETE,
     N_WINDOW,
     ORBIT_HEADING_WINDOW,
     ORBIT_MIN_CUMULATIVE_DEG,
+    PROCESS_NOISE_ADAPTIVE,
+    PROCESS_NOISE_MAX_SCALE,
+    PROCESS_NOISE_NIS_MEMORY,
+    SHADOW_MIN_FRACTION,
     SPEED_OF_LIGHT,
     SPOOF_MIN_FROZEN_FRAMES,
     SPOOF_MIN_SPEED_KTS,
+    WAVELENGTH_KM,
     _get_param,
     get_mach1_doppler_threshold,
 )
+from .kalman import MEASUREMENT_DIM, doppler_to_range_rate
 
 TRACK_HISTORY_MAX = 600
 
@@ -80,6 +89,9 @@ class Track:
         self.n_frames = 1
         self.n_associated = 0
         self.n_missed = 0
+        self.n_shadow_obs = 1
+        self.nis_ema = float(MEASUREMENT_DIM)
+        self.n_shadowed = 1 if detection.get("shadowed") else 0
 
         self.total_snr = detection["snr"]
         self.birth_timestamp = timestamp
@@ -626,34 +638,19 @@ class Track:
         self.adsb_hex = adsb.get("hex")
         self.adsb_initialized = True
 
-        self.state = np.array([detection["delay"], 0.0, detection["doppler"], 0.0])
-
-        if adsb.get("gs") is not None and adsb.get("track") is not None:
-            gs = adsb["gs"]
-            track = adsb["track"]
-            if not (gs >= 0 and 0 <= track < 360 and not np.isnan(gs) and not np.isnan(track)):
-                pass
-            else:
-                vel_east, vel_north, vel_up = geometry.enu_velocity_from_adsb(gs, track, adsb.get("geom_rate", 0))
-                if np.isnan(vel_east) or np.isnan(vel_north) or np.isnan(vel_up):
-                    pass
-                else:
-                    vel_horiz = np.sqrt(vel_east**2 + vel_north**2)
-                    if np.isnan(vel_horiz) or np.isinf(vel_horiz):
-                        pass
-                    else:
-                        delay_rate_est = vel_horiz / 299792.458
-                        if not (np.isnan(delay_rate_est) or np.isinf(delay_rate_est)):
-                            self.state[1] = delay_rate_est
-
-        pos_unc = adsb_config["initial_covariance"]["position"]
-        vel_unc = adsb_config["initial_covariance"]["velocity"]
-        delay_unc = pos_unc / 1000.0
-        self.covariance = np.diag([delay_unc, vel_unc / 1000, 20.0, 10.0])
+        self._init_from_delay_doppler(detection)
+        self.covariance[0, 0] = adsb_config["initial_covariance"]["position"] / 1000.0
 
     def _init_from_delay_doppler(self, detection):
-        self.state = np.array([detection["delay"], 0.0, detection["doppler"], 0.0])
-        self.covariance = np.diag([10.0, 5.0, 20.0, 10.0])
+        wavelength = WAVELENGTH_KM()
+        self.state = np.array([detection["delay"], doppler_to_range_rate(detection["doppler"]), 0.0])
+        self.covariance = np.diag(
+            [
+                MEASUREMENT_NOISE_DELAY,
+                wavelength * wavelength * MEASUREMENT_NOISE_DOPPLER,
+                INITIAL_RANGE_ACCEL_VARIANCE,
+            ]
+        )
 
     @classmethod
     def _generate_id(cls, timestamp_ms, adsb_hex=None):
@@ -671,9 +668,24 @@ class Track:
         cls._daily_counter += 1
         return track_id
 
+    def process_noise_scale(self):
+        """How far the filter's own residuals say its motion model is wrong.
+
+        A matched filter produces a normalised innovation squared averaging
+        the measurement dimension, so the ratio to that is how badly the
+        constant-acceleration assumption is failing right now. A banking
+        aircraft drives it up and widens the gate for exactly as long as it
+        banks; a cruising one leaves it at the floor. Floored at 1 rather
+        than allowed to shrink, so a well-modelled target behaves exactly as
+        it did before this existed.
+        """
+        if not PROCESS_NOISE_ADAPTIVE():
+            return 1.0
+        return min(max(self.nis_ema / MEASUREMENT_DIM, 1.0), PROCESS_NOISE_MAX_SCALE())
+
     def predict(self, dt):
         self.kf.dt = dt
-        state_pred, cov_pred = self.kf.predict(self.state, self.covariance)
+        state_pred, cov_pred = self.kf.predict(self.state, self.covariance, self.process_noise_scale())
         self.state = state_pred
         # Freeze covariance growth once coasting exceeds N_COAST so the
         # association gate stops inflating toward unrelated detections while
@@ -682,8 +694,12 @@ class Track:
             self.covariance = cov_pred
 
     def update(self, detection, timestamp, frame=0):
-        measurement = np.array([detection["delay"], detection["doppler"]])
-        self.state, self.covariance = self.kf.update(self.state, self.covariance, measurement, detection.get("snr"))
+        measurement = np.array([detection["delay"], doppler_to_range_rate(detection["doppler"])])
+        self.state, self.covariance, nis = self.kf.update(
+            self.state, self.covariance, measurement, detection.get("snr")
+        )
+        memory = PROCESS_NOISE_NIS_MEMORY()
+        self.nis_ema = (1.0 - memory) * self.nis_ema + memory * nis
 
         # Identity swap check MUST run before adsb_hex capture
         self._check_identity_change_anomaly(detection, timestamp)
@@ -696,6 +712,10 @@ class Track:
             if self._validate_adsb_data(adsb) and adsb.get("hex"):
                 self.adsb_hex = adsb["hex"]
                 self.adsb_initialized = True
+
+        self.n_shadow_obs += 1
+        if detection.get("shadowed"):
+            self.n_shadowed += 1
 
         self.history["timestamps"].append(timestamp)
         self.history["frames"].append(frame)
@@ -742,10 +762,35 @@ class Track:
     def get_innovation_base(self):
         return self.kf.get_innovation_base(self.covariance)
 
+    def is_shadowed(self):
+        """Whether this track lives in the delay shadow of brighter returns.
+
+        A strong aircraft casts multipath and sidelobe replicas at longer
+        bistatic range and lower SNR. Measured on a live node over 93
+        same-frame pairs: 89% of the spurious detections around an aircraft
+        sat at longer delay than it and 99% were weaker, median 6.9 dB down.
+        They are kinematically consistent, so the filter cannot reject them;
+        only their position relative to a brighter return gives them away.
+        """
+        if self.n_shadow_obs < 3:
+            return False
+        return self.shadow_fraction() >= SHADOW_MIN_FRACTION()
+
+    def shadow_fraction(self):
+        """Share of this track's detections that sat behind a brighter return.
+
+        Reported so a site where the shadow thresholds do not fit is visible
+        without anyone analysing anything: on the node these were measured
+        against, every ADS-B-matched aircraft stayed at 0.00 while replica
+        tracks ran a median of 0.64. An identified aircraft drifting up from
+        zero means the thresholds are wrong here.
+        """
+        return self.n_shadowed / max(self.n_shadow_obs, 1)
+
     def promote_if_ready(self):
         if self.state_status == TrackState.TENTATIVE:
             if self.n_frames >= N_WINDOW():
-                if self.n_associated >= M_THRESHOLD():
+                if self.n_associated >= M_THRESHOLD() and not self.is_shadowed():
                     self.state_status = TrackState.ACTIVE
                     return True
         return False
@@ -852,6 +897,7 @@ class Track:
             "avg_snr": avg_snr,
             "duration_sec": duration_sec,
             "continuity": continuity,
+            "shadow_fraction": self.shadow_fraction(),
             "birth_timestamp": self.birth_timestamp,
             "death_timestamp": self.death_timestamp,
             "is_anomalous": self.is_anomalous,

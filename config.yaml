@@ -11,10 +11,34 @@ tracker:
   gate_threshold: 9.0     # Chi-squared gate (99% confidence)
   detection_window: 20    # Rolling detection window for streaming output
 
-# Process noise (Kalman filter)
+# Radar geometry. center_frequency must match the node's blah2 capture.fc:
+# it sets the wavelength that converts Doppler into bistatic range rate, so a
+# wrong value biases every track's velocity by the same ratio.
+radar:
+  center_frequency: 177000000
+
+# Process noise. Bistatic range acceleration is dominated by geometry rather
+# than by the aircraft, so it differs more between sites than between flight
+# phases: two nodes measured 2.9x apart, driven by traffic passing at 29.8 km
+# against 5.8 km. There is therefore no single right jerk, so range_jerk is a
+# floor and the filter widens from it by however far its own residuals say its
+# motion model is failing.
 process_noise:
-  delay: 0.1              # Delay process noise
-  doppler: 0.5            # Doppler process noise
+  range_jerk: 1.0e-7      # Bistatic range jerk PSD floor (km^2/s^5)
+  adaptive: true          # Widen from the floor on the filter's own residuals
+  max_scale: 25.0         # Ceiling on that widening
+  nis_memory: 0.25        # Weight on the newest residual, so ~4 frames of memory
+
+# Multipath and sidelobe suppression. A strong target casts weaker replicas at
+# longer bistatic range; they obey the same kinematics as the target, so only
+# their position behind a brighter return gives them away. Measured on a live
+# node: aircraft tracks never exceeded a shadowed fraction of 0.10, while
+# replica tracks ran a median of 0.64.
+shadow:
+  enabled: true
+  delay_km: 3.0          # how far behind a brighter return counts as shadowed
+  snr_margin_db: 3.0     # how much brighter that return must be
+  min_fraction: 0.5      # shadowed share of a track's detections that blocks promotion
 
 # Tracklet initiation thresholds
 tracklet:

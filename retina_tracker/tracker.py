@@ -11,16 +11,20 @@ from .config import (
     GATE_THRESHOLD,
     M_THRESHOLD,
     MIN_SNR,
+    SHADOW_DELAY_KM,
+    SHADOW_ENABLED,
+    SHADOW_SNR_MARGIN_DB,
     TRACKLET_MAX_DELAY_RESIDUAL,
     TRACKLET_MAX_DOPPLER_RESIDUAL,
     TRACKLET_MAX_TIME_SPAN,
     get_config,
 )
-from .kalman import KalmanFilter
+from .kalman import KalmanFilter, doppler_to_range_rate
 from .track import Track, TrackState
 
 MERGE_WINDOW_MS = 5000
 MAX_COMPLETED_TRACKS = 50
+UNBOUNDED_ARCHIVE = None
 MAX_FRAME_DT_S = 60.0
 BACKWARDS_RUN_BEFORE_RESYNC = 3
 
@@ -28,13 +32,11 @@ BACKWARDS_RUN_BEFORE_RESYNC = 3
 class Tracker:
     """Multi-target tracker using Kalman filtering and GNN data association."""
 
-    def __init__(self, event_writer=None, detection_window=20, config=None, max_completed_tracks=None):
+    def __init__(self, event_writer=None, detection_window=20, config=None, max_completed_tracks=MAX_COMPLETED_TRACKS):
         self.kf = KalmanFilter()
         self.tracks = []
         self.all_tracks = []
-        self.completed_tracks = deque(
-            maxlen=MAX_COMPLETED_TRACKS if max_completed_tracks is None else max_completed_tracks
-        )
+        self.completed_tracks = deque(maxlen=max_completed_tracks)
         self.last_timestamp = None
         self.detection_window = detection_window
         self._reset_counters()
@@ -65,6 +67,31 @@ class Tracker:
         self.n_clock_resyncs = 0
         self.n_backwards = 0
 
+    @staticmethod
+    def _mark_shadows(detections):
+        """Flag detections sitting behind a brighter return in delay.
+
+        Multipath and range sidelobes put a weaker copy of a strong target at
+        longer bistatic range. The copy obeys the same kinematics as the
+        target it came from, so nothing downstream of the filter can tell it
+        apart; the giveaway is a brighter detection sitting a short way in
+        front of it in the same frame. Doppler is deliberately not compared:
+        measured offsets ran to a median 35 Hz even for replicas within
+        1.5 km, because the replica travels a different path.
+        """
+        if not SHADOW_ENABLED():
+            for det in detections:
+                det["shadowed"] = False
+            return
+        window = SHADOW_DELAY_KM()
+        margin = SHADOW_SNR_MARGIN_DB()
+        for det in detections:
+            det["shadowed"] = any(
+                0 < det["delay"] - other["delay"] <= window and other["snr"] - det["snr"] >= margin
+                for other in detections
+                if other is not det
+            )
+
     def process_frame(self, detections, timestamp):
         """Advance every track by one frame, `timestamp` in milliseconds.
 
@@ -86,6 +113,7 @@ class Tracker:
             dt = 0.5
 
         detections = [d for d in detections if d["snr"] >= MIN_SNR()]
+        self._mark_shadows(detections)
 
         for track in self.tracks:
             track.predict(dt)
@@ -119,6 +147,7 @@ class Tracker:
                         is_anomalous=track.is_anomalous,
                         max_velocity_ms=track.max_velocity_ms,
                         anomaly_types=track.anomaly_types,
+                        shadow_fraction=track.shadow_fraction(),
                     )
                 else:
                     detections_window = track.get_recent_detections(n=self.detection_window)
@@ -132,6 +161,7 @@ class Tracker:
                         is_anomalous=track.is_anomalous,
                         max_velocity_ms=track.max_velocity_ms,
                         anomaly_types=track.anomaly_types,
+                        shadow_fraction=track.shadow_fraction(),
                     )
 
         for i, track in enumerate(self.tracks):
@@ -218,7 +248,7 @@ class Tracker:
 
         # Pre-compute detection measurements as a single (n_dets, 2) array
         # to avoid creating n_tracks × n_dets individual numpy arrays.
-        det_z = np.array([[d["delay"], d["doppler"]] for d in detections])
+        det_z = np.array([[d["delay"], doppler_to_range_rate(d["doppler"])] for d in detections])
         det_snr = np.array([d.get("snr", 10.0) for d in detections])
         snr_weights = 20.0 / np.maximum(det_snr, 5.0)
         # Per-detection measurement-noise scale — the same model update()
@@ -330,11 +360,11 @@ class Tracker:
             if (
                 max_delay_residual < TRACKLET_MAX_DELAY_RESIDUAL()
                 and max_doppler_residual < TRACKLET_MAX_DOPPLER_RESIDUAL()
+                and not track.is_shadowed()
             ):
                 track.state_status = TrackState.ACTIVE
 
-                track.state[1] = delay_velocity
-                track.state[3] = doppler_velocity
+                track.state[2] = doppler_to_range_rate(doppler_velocity)
 
                 track.id = Track._generate_id(timestamp, adsb_hex=track.adsb_hex)
 
@@ -350,6 +380,7 @@ class Tracker:
                         is_anomalous=track.is_anomalous,
                         max_velocity_ms=track.max_velocity_ms,
                         anomaly_types=track.anomaly_types,
+                        shadow_fraction=track.shadow_fraction(),
                     )
 
     def _merge_tracks(self):
@@ -378,9 +409,9 @@ class Tracker:
                 start_state_b = track_b.history["states"][0]
 
                 delay_diff = abs(end_state_a[0] - start_state_b[0])
-                doppler_diff = abs(end_state_a[2] - start_state_b[2])
+                rate_diff = abs(end_state_a[1] - start_state_b[1])
 
-                if delay_diff < 5.0 and doppler_diff < 50.0:
+                if delay_diff < 5.0 and rate_diff < abs(doppler_to_range_rate(50.0)):
                     self._merge_track_pair(track_a, track_b)
                     merged_indices.add(j)
                     break

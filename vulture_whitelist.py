@@ -41,3 +41,18 @@ _.get_tracks
 # TODO: no reference found anywhere in the estate
 #   retina_tracker/track.py:760  (unused method)
 _.is_high_quality
+# TODO: recorded reference measurements that tests/test_synthetic.py does not
+# yet assert. Decide per name: add an assertion so the generator cannot drift
+# away from it, or drop it from the reference record. The two Doppler-rate
+# entries came off this list by being asserted, after going unasserted long
+# enough to disagree with every estimator of the generator's own output.
+#   synthetic/profile.py  (unused variables)
+CPI_S
+SAMPLE_RATE_HZ
+DELAY_BIN_KM
+DELAY_MIN_KM
+DOPPLER_BIN_HZ
+LONGEST_RUN_MAX
+TARGET_HITS_MEDIAN
+TARGET_HITS_MAX
+BISTATIC_RANGE_RATE_MEDIAN_MS

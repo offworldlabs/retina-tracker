@@ -55,8 +55,9 @@ def load_config(config_path=None):
             "gate_threshold": 9.0,
             "detection_window": 20,
         },
-        "process_noise": {"delay": 0.1, "doppler": 0.5},
+        "process_noise": {"range_jerk": 1e-7, "adaptive": True, "max_scale": 25.0, "nis_memory": 0.25},
         "tracklet": {"max_delay_residual": 2.0, "max_doppler_residual": 10.0, "max_time_span": 3.0},
+        "shadow": {"enabled": True, "delay_km": 3.0, "snr_margin_db": 3.0, "min_fraction": 0.5},
         "adsb": {
             "enabled": False,
             "priority": True,
@@ -152,16 +153,49 @@ def OUTPUT_BACKUP_COUNT():
     return _get_param("output", "backup_count", 1)
 
 
-def PROCESS_NOISE_DELAY():
-    return _get_param("process_noise", "delay", 0.1)
-
-
-def PROCESS_NOISE_DOPPLER():
-    return _get_param("process_noise", "doppler", 0.5)
-
-
 MEASUREMENT_NOISE_DELAY = 1.0
 MEASUREMENT_NOISE_DOPPLER = 5.0
+INITIAL_RANGE_ACCEL_VARIANCE = 1e-4
+
+
+def CENTER_FREQUENCY_HZ():
+    return _get_param("radar", "center_frequency", 200000000)
+
+
+def WAVELENGTH_KM():
+    return SPEED_OF_LIGHT / CENTER_FREQUENCY_HZ() / 1000.0
+
+
+def PROCESS_NOISE_JERK():
+    return _get_param("process_noise", "range_jerk", 1e-7)
+
+
+def PROCESS_NOISE_ADAPTIVE():
+    return _get_param("process_noise", "adaptive", True)
+
+
+def PROCESS_NOISE_MAX_SCALE():
+    return _get_param("process_noise", "max_scale", 25.0)
+
+
+def PROCESS_NOISE_NIS_MEMORY():
+    return _get_param("process_noise", "nis_memory", 0.25)
+
+
+def SHADOW_ENABLED():
+    return _get_param("shadow", "enabled", True)
+
+
+def SHADOW_DELAY_KM():
+    return _get_param("shadow", "delay_km", 3.0)
+
+
+def SHADOW_SNR_MARGIN_DB():
+    return _get_param("shadow", "snr_margin_db", 3.0)
+
+
+def SHADOW_MIN_FRACTION():
+    return _get_param("shadow", "min_fraction", 0.5)
 
 
 def TRACKLET_MAX_DELAY_RESIDUAL():
@@ -208,5 +242,4 @@ def get_mach1_doppler_threshold():
 
     Uses worst-case bistatic geometry (TX/RX collocated): f_d = 2 * v * fc / c
     """
-    fc = _get_param("radar", "center_frequency", 200000000)
-    return 2 * MACH_1_MS * fc / SPEED_OF_LIGHT
+    return 2 * MACH_1_MS * CENTER_FREQUENCY_HZ() / SPEED_OF_LIGHT

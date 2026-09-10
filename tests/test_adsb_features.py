@@ -77,7 +77,7 @@ def test_adsb_tracking():
             "gate_threshold": 9.0,
             "detection_window": 20,
         },
-        "process_noise": {"delay": 0.1, "doppler": 0.5},
+        "process_noise": {"range_jerk": 1e-7},
         "tracklet": {"max_delay_residual": 2.0, "max_doppler_residual": 10.0, "max_time_span": 3.0},
         "adsb": {
             "enabled": True,
@@ -112,7 +112,7 @@ def test_adsb_tracking():
         print(f"  ADS-B initialized: {track_dict['adsb_initialized']}")
         print(f"  Associations: {track_dict['n_associated']}")
         print(f"  Quality score: {track_dict['quality_score']:.1f}")
-        print(f"  Initial covariance: delay={track.covariance[0, 0]:.3f}, doppler={track.covariance[2, 2]:.3f}")
+        print(f"  Initial covariance: delay={track.covariance[0, 0]:.3f}, rate={track.covariance[1, 1]:.6f}")
 
     # Assertions
     assert len(confirmed_tracks) >= 1, "Should have at least 1 confirmed track"
