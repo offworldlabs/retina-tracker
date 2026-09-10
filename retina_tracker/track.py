@@ -56,8 +56,34 @@ class Track:
     _daily_counter = 0
     _last_date = None
 
+    @property
+    def state_status(self):
+        return self._state_status
+
+    @state_status.setter
+    def state_status(self, value):
+        """Latches ever_confirmed on the way through ACTIVE.
+
+        A track reaches ACTIVE by three routes: promotion on M-of-N, a
+        coasting track re-associating, and tracklet initiation. Latching at
+        the assignment catches all of them, and any fourth added later,
+        which matters because the flag is load-bearing for detection
+        classification and a missed route reads as "this detection was never
+        in a confirmed track".
+
+        Its current status cannot stand in for the flag. A track that was
+        ACTIVE and has since coasted or been deleted reads the same as one
+        that never got there.
+        """
+        self._state_status = value
+        if value is TrackState.ACTIVE:
+            self.ever_confirmed = True
+
     def __init__(self, detection, timestamp, kf, frame=0, config=None):
         self.id = None
+        # Before state_status: its setter latches ever_confirmed.
+        self.ever_confirmed = False
+        self.retired = False
         self.state_status = TrackState.TENTATIVE
         self.kf = kf
         self.adsb_hex = None

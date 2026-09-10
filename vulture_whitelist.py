@@ -20,7 +20,26 @@ starts catching NEW dead code immediately; working through them is separate.
 _ = type("_", (), {})()
 
 # ── Contracts: referenced by something vulture cannot see ─────────────────────
-# (none)
+# http.server dispatches request handlers by name: BaseHTTPRequestHandler
+# builds the method name from the verb on the request line and getattr()s it.
+# Nothing in this repo calls either of these, and nothing should.
+#   retina_tracker/control.py  (_Handler)
+_.do_GET
+_.do_POST
+
+# An override the base class calls, to keep per-request logging off stderr.
+# Deleting it restores the noisy default rather than changing nothing.
+#   retina_tracker/control.py  (_Handler)
+_.log_message
+
+# Class attributes read by http.server and socketserver, never by us.
+# protocol_version selects HTTP/1.1, which is what makes chunked framing
+# available; without it every SSE message would arrive as one unframed body
+# and a urllib3 client would block until its read timeout.
+#   retina_tracker/control.py
+_.protocol_version
+_.daemon_threads
+_.allow_reuse_address
 
 # ── UNREVIEWED: appears dead, needs a decision (delete, or finish wiring) ──────
 # TODO: no reference found anywhere in the estate

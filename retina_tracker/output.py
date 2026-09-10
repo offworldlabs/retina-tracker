@@ -3,9 +3,16 @@
 import json
 import os
 import sys
+from collections import OrderedDict
 
 DEFAULT_MAX_BYTES = 64 * 1024 * 1024
 DEFAULT_BACKUP_COUNT = 1
+
+# How many tracks to remember having written detections for. Only live tracks
+# emit, so this is an LRU over "recently emitting" rather than over every track
+# of the run. Evicting one costs a repeated window, not a lost detection, so a
+# generous cap is cheap: a track id and an integer apiece.
+EMITTED_MEMORY = 512
 
 
 class TrackEventWriter:
@@ -26,6 +33,8 @@ class TrackEventWriter:
         self.max_bytes = max_bytes
         self.backup_count = backup_count
         self.bytes_written = 0
+        # track_id -> newest detection timestamp already written for it.
+        self._emitted_through = OrderedDict()
 
         if output_file == "-":
             self.path = None
@@ -36,6 +45,33 @@ class TrackEventWriter:
             # Long-lived handle, released by close(); not a context-manager case.
             self.output = open(output_file, "w")  # noqa: SIM115
             self._is_stdout = False
+
+    def _new_detections(self, track_id, detections):
+        """The detections of this event not already written for this track.
+
+        Each event carries a rolling window of the track's most recent points
+        (Track.get_recent_detections), of which typically one is new. Repeating
+        the other nineteen every time multiplied this file by roughly twenty
+        for no consumer's benefit: live_score.load_tracks unions its
+        detections by timestamp, and so does retina-gui's buffer, so neither
+        can tell a delta stream from a repeating one.
+
+        A high-water mark is sufficient because a track's history only grows
+        forwards for as long as it can emit. Merging is the one thing that
+        splices older points into a track, and it operates on all_tracks,
+        the post-mortem archive, after the track has been deleted from
+        self.tracks and can no longer produce an event.
+        """
+        through = self._emitted_through.get(track_id)
+        if through is not None:
+            self._emitted_through.move_to_end(track_id)
+            detections = [d for d in detections if d["timestamp"] > through]
+        if detections:
+            self._emitted_through[track_id] = max(d["timestamp"] for d in detections)
+            self._emitted_through.move_to_end(track_id)
+            while len(self._emitted_through) > EMITTED_MEMORY:
+                self._emitted_through.popitem(last=False)
+        return detections
 
     def write_event(
         self,
@@ -50,6 +86,12 @@ class TrackEventWriter:
         anomaly_types=None,
         shadow_fraction=0.0,
     ):
+        # Only what is new. The event is still written when nothing is —
+        # length, the anomaly flags and shadow_fraction all move over a
+        # track's life, and a consumer that missed those updates would be
+        # reading a stale opinion of a live track.
+        detections = self._new_detections(track_id, detections)
+
         event = {
             "track_id": track_id,
             "adsb_hex": adsb_hex,
