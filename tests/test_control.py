@@ -14,13 +14,16 @@ the reset has happened or merely been scheduled.
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 
 import pytest
 
+from retina_tracker import control
 from retina_tracker.config import get_config
 from retina_tracker.control import start_control_server
+from retina_tracker.history import CLASSES, DetectionHistory
 from retina_tracker.server import process_streaming_frame
 from retina_tracker.tracker import Tracker
 
@@ -144,3 +147,135 @@ def test_reset_waits_for_an_in_flight_frame(served):
     assert done.wait(timeout=5)
     assert result["status"] == 200
     assert tracker.frame_count == 0
+
+
+# ── The data stream ─────────────────────────────────────────────────────────
+
+def read_events(response, count, timeout=10):
+    """Pull `count` SSE messages off an open stream."""
+    events = []
+    kind, buf = None, []
+    deadline = time.monotonic() + timeout
+    for raw in response:
+        line = raw.decode().rstrip("\n")
+        if line.startswith("event: "):
+            kind = line[7:]
+        elif line.startswith("data: "):
+            buf.append(line[6:])
+        elif line == "":
+            if kind and buf:
+                events.append((kind, json.loads("".join(buf))))
+                if len(events) >= count:
+                    return events
+            kind, buf = None, []
+        if time.monotonic() > deadline:
+            break
+    return events
+
+
+@pytest.fixture
+def streaming(monkeypatch):
+    """A control server with a history behind it, streaming quickly."""
+    monkeypatch.setattr(control, "STREAM_INTERVAL_S", 0.05)
+    tracker = Tracker(config=get_config())
+    history = DetectionHistory()
+    lock = threading.Lock()
+    server = start_control_server(tracker, lock, host="127.0.0.1", port=0,
+                                 history=history)
+    try:
+        yield history, f"http://127.0.0.1:{server.port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def open_stream(base, query=""):
+    return urllib.request.urlopen(base + "/events" + query, timeout=10)
+
+
+def test_the_stream_opens_with_a_snapshot(streaming):
+    """One ordering, owned by the connection. Fetching the snapshot
+    separately would race the start of the delta stream."""
+    history, base = streaming
+    history.write_detections(1000, [{"delay": 10.0, "doppler": 50.0, "snr": 15.0}], [], [])
+
+    with open_stream(base) as response:
+        kind, payload = read_events(response, 1)[0]
+
+    assert kind == "snapshot"
+    assert payload["detections"]["associated"]["delay"] == [10.0]
+    assert set(payload["detections"]) == set(CLASSES)
+
+
+def test_deltas_carry_only_what_was_appended(streaming):
+    history, base = streaming
+    history.write_detections(1000, [{"delay": 10.0, "doppler": 50.0, "snr": 15.0}], [], [])
+
+    with open_stream(base) as response:
+        assert read_events(response, 1)[0][0] == "snapshot"
+        history.write_detections(2000, [], [{"delay": 20.0, "doppler": -30.0, "snr": 9.0}], [])
+        kind, payload = read_events(response, 1)[0]
+
+    assert kind == "delta"
+    assert payload["detections"]["unassociated"]["delay"] == [20.0]
+    assert payload["detections"]["associated"]["t"] == [], "the snapshot's point came again"
+
+
+def test_all_three_classes_reach_a_consumer(streaming):
+    """below_snr is the one nothing could see before."""
+    history, base = streaming
+    with open_stream(base) as response:
+        read_events(response, 1)
+        history.write_detections(1000,
+                                 [{"delay": 1.0, "doppler": 0.0, "snr": 15.0}],
+                                 [{"delay": 2.0, "doppler": 0.0, "snr": 9.0}],
+                                 [{"delay": 3.0, "doppler": 0.0, "snr": 2.0}])
+        _kind, payload = read_events(response, 1)[0]
+
+    assert payload["detections"]["associated"]["delay"] == [1.0]
+    assert payload["detections"]["unassociated"]["delay"] == [2.0]
+    assert payload["detections"]["below_snr"]["delay"] == [3.0]
+
+
+def test_a_clear_reseeds_the_stream_rather_than_reconciling(streaming):
+    history, base = streaming
+    history.write_detections(1000, [{"delay": 10.0, "doppler": 50.0, "snr": 15.0}], [], [])
+
+    with open_stream(base) as response:
+        read_events(response, 1)
+        history.clear()
+        history.write_detections(2000, [{"delay": 99.0, "doppler": 0.0, "snr": 15.0}], [], [])
+        kind, payload = read_events(response, 1)[0]
+
+    assert kind == "snapshot", "a voided cursor produced a delta"
+    assert payload["detections"]["associated"]["delay"] == [99.0]
+
+
+def test_a_window_is_clamped_to_what_is_held(streaming):
+    history, base = streaming
+    with open_stream(base, "?window=999999") as response:
+        _kind, payload = read_events(response, 1)[0]
+    assert payload["window_s"] == history.window_s
+
+    with open_stream(base, "?window=1") as response:
+        _kind, payload = read_events(response, 1)[0]
+    assert payload["window_s"] == control.MIN_WINDOW_S
+
+
+def test_health_reports_the_history_footprint(streaming):
+    history, base = streaming
+    history.write_detections(1000, [{"delay": 10.0, "doppler": 50.0, "snr": 15.0}], [], [])
+
+    status, body = request(base + "/health")
+
+    assert status == 200
+    assert body["history"]["detections"]["associated"] == 1
+    assert body["history"]["approx_bytes"] == 20
+
+
+def test_the_stream_is_unavailable_without_a_history(served):
+    """The CLI runs without one, and must say so rather than pretend."""
+    _tracker, _lock, base = served
+    status, body = request(base + "/events")
+    assert status == 503
+    assert "error" in body

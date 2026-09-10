@@ -10,6 +10,7 @@ from .config import get_config
 from .control import DEFAULT_HOST as CONTROL_HOST
 from .control import DEFAULT_PORT as CONTROL_PORT
 from .control import start_control_server
+from .history import MAX_POINTS, WINDOW_S, DetectionHistory, TeeEventWriter, start_pruner
 from .tracker import Tracker
 
 
@@ -160,7 +161,8 @@ def serve_detections(server, tracker, tracker_lock, stop_event=None):
 
 
 def run_tcp_server(host="0.0.0.0", port=3012, event_writer=None, detection_window=20,
-                   config=None, control_host=CONTROL_HOST, control_port=CONTROL_PORT):
+                   config=None, control_host=CONTROL_HOST, control_port=CONTROL_PORT,
+                   history_window_s=WINDOW_S, history_max_points=MAX_POINTS):
     """Run tracker as TCP server receiving detection frames from blah2.
 
     Args:
@@ -171,12 +173,23 @@ def run_tcp_server(host="0.0.0.0", port=3012, event_writer=None, detection_windo
         config: Configuration dict
         control_host: Bind address for the HTTP control surface
         control_port: Port for the HTTP control surface; 0 disables it
+        history_window_s: How much of the recent past to keep in memory
+        history_max_points: Hard ceiling per detection class, whatever the rate
     """
+    # In memory rather than on disk: it does not need to survive a restart,
+    # and the alternative was several hundred megabytes a day onto an SD card.
+    history = DetectionHistory(window_s=history_window_s,
+                               max_points=history_max_points)
+
     tracker = Tracker(
-        event_writer=event_writer,
+        # The file's writer deduplicates detections, so it goes first and the
+        # history records what was actually written.
+        event_writer=TeeEventWriter(event_writer, history),
         detection_window=detection_window,
         config=config or get_config(),
+        detection_sink=history,
     )
+    start_pruner(history)
 
     # Guards every mutation of `tracker`. The frame path has always been
     # single-threaded, so this is uncontended right up until the control
@@ -185,7 +198,8 @@ def run_tcp_server(host="0.0.0.0", port=3012, event_writer=None, detection_windo
 
     if control_port:
         control = start_control_server(tracker, tracker_lock,
-                                       host=control_host, port=control_port)
+                                       host=control_host, port=control_port,
+                                       history=history)
         print(f"Tracker control on {control_host}:{control.port}", file=sys.stderr)
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

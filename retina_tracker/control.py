@@ -23,10 +23,26 @@ two clients; a framework would be a dependency and an image layer for nothing.
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 30101
+
+# How often a stream looks for new points. The tracker appends about once a
+# second, so this is the resolution of the feed rather than a poll of anything
+# expensive: since() on an unchanged history is a few length comparisons.
+STREAM_INTERVAL_S = 1.0
+
+# A comment line keeps an idle connection open through anything that times out
+# silent sockets, and is how a stream notices the client has gone: the write
+# fails.
+HEARTBEAT_S = 15.0
+
+# Clamped rather than rejected. A window is a display preference, and must
+# never let a query string ask for more than is held.
+MIN_WINDOW_S = 60
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -62,16 +78,96 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
     def do_GET(self):
-        if self._route() in ("/health", ""):
+        route = self._route()
+        if route in ("/health", ""):
             with self.server.tracker_lock:
                 payload = {
                     "ok": True,
                     "frames": self.server.tracker.frame_count,
                     "tracks": len(self.server.tracker.tracks),
                 }
+            if self.server.history is not None:
+                payload["history"] = self.server.history.stats()
             self._send(200, payload)
             return
+        if route == "/events":
+            self._stream()
+            return
         self._send(404, {"error": "not found"})
+
+    # ── The data stream ────────────────────────────────────────
+
+    def _window(self):
+        raw = parse_qs(urlparse(self.path).query).get("window", [None])[0]
+        if raw is None:
+            return None
+        try:
+            seconds = int(raw)
+        except ValueError:
+            return None
+        if seconds <= 0:
+            return None
+        return max(MIN_WINDOW_S, min(seconds, self.server.history.window_s))
+
+    def _stream(self):
+        """Server-sent events: a snapshot, then only what has been appended.
+
+        The connection is the session. Its cursor lives in this thread and
+        nowhere else, so there is no per-consumer state on the server to
+        expire, and no negotiation: a reconnect simply takes a fresh
+        snapshot, which is always a valid thing to start from.
+
+        Sending the snapshot down this same stream rather than having the
+        consumer fetch it separately is what removes the race between what
+        the snapshot contained and where the delta stream began. There is one
+        ordering, and this generator owns it.
+        """
+        if self.server.history is None:
+            self._send(503, {"error": "history not enabled"})
+            return
+
+        window_s = self._window()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        # No length is knowable, and this never ends of its own accord.
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        history = self.server.history
+        try:
+            payload, cursor = history.snapshot(window_s=window_s)
+            self._event("snapshot", payload)
+
+            last_sent = time.monotonic()
+            while not self.server.stopping.is_set():
+                time.sleep(STREAM_INTERVAL_S)
+
+                delta, new_cursor = history.since(cursor)
+                if delta is None:
+                    # clear() ran, so every outstanding cursor is void.
+                    # Re-seed rather than trying to reconcile.
+                    payload, cursor = history.snapshot(window_s=window_s)
+                    self._event("snapshot", payload)
+                    last_sent = time.monotonic()
+                    continue
+
+                cursor = new_cursor
+                if _has_points(delta):
+                    self._event("delta", delta)
+                    last_sent = time.monotonic()
+                elif time.monotonic() - last_sent >= HEARTBEAT_S:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    last_sent = time.monotonic()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # the consumer went away, which is how a stream ends
+
+    def _event(self, kind, payload):
+        body = json.dumps(payload, separators=(",", ":"))
+        self.wfile.write(f"event: {kind}\ndata: {body}\n\n".encode())
+        self.wfile.flush()
 
     def _route(self):
         return self.path.split("?", 1)[0].rstrip("/")
@@ -91,10 +187,19 @@ class ControlServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT):
+    def __init__(self, tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT,
+                 history=None):
         super().__init__((host, port), _Handler)
         self.tracker = tracker
         self.tracker_lock = tracker_lock
+        self.history = history
+        # Lets an open stream wind down on shutdown instead of holding the
+        # process up for a full interval.
+        self.stopping = threading.Event()
+
+    def shutdown(self):
+        self.stopping.set()
+        super().shutdown()
 
     @property
     def port(self):
@@ -103,12 +208,19 @@ class ControlServer(ThreadingHTTPServer):
         return self.server_address[1]
 
 
-def start_control_server(tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT):
+def _has_points(delta):
+    if delta["tracks"]:
+        return True
+    return any(cols["t"] for cols in delta["detections"].values())
+
+
+def start_control_server(tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT,
+                         history=None):
     """Serve the control surface on a daemon thread and return the server.
 
     The thread is a daemon so it never holds up interpreter shutdown: the
     tracker process is killed by its supervisor, not asked to wind down."""
-    server = ControlServer(tracker, tracker_lock, host=host, port=port)
+    server = ControlServer(tracker, tracker_lock, host=host, port=port, history=history)
     thread = threading.Thread(target=server.serve_forever, daemon=True,
                               name="tracker-control")
     thread.start()

@@ -211,6 +211,13 @@ def main():
                              "network_mode host, where 0.0.0.0 would publish it on the LAN.")
     parser.add_argument("--control-port", type=int, default=30101,
                         help="HTTP control surface port (default: 30101). 0 disables it.")
+    parser.add_argument("--history-window", type=int, default=4 * 3600,
+                        help="Seconds of detections and tracks kept in memory for "
+                             "GET /events (default: 14400, four hours).")
+    parser.add_argument("--history-max-points", type=int, default=500_000,
+                        help="Hard ceiling on points held per detection class, so the "
+                             "footprint stays predictable whatever the detection rate "
+                             "(default: 500000, about 10 MB per class).")
 
     args = parser.parse_args()
 
@@ -247,6 +254,8 @@ def main():
             config=get_config(),
             control_host=args.control_host,
             control_port=args.control_port,
+            history_window_s=args.history_window,
+            history_max_points=args.history_max_points,
         )
     else:
         tracker = process_detections(args.file, event_writer=event_writer, detection_window=args.detection_window)
