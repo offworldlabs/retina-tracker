@@ -71,8 +71,8 @@ class TestTheFilterReportsAndUsesIt:
         kf = KalmanFilter()
         state = np.array([10.0, 0.0, 0.0])
         cov = np.diag([1.0, 1e-5, 1e-4])
-        _, _, nis = kf.update(state, cov, np.array([10.0, 0.0]), snr=15.0)
-        assert nis == pytest.approx(0.0, abs=1e-9)
+        _, _, residual = kf.update(state, cov, np.array([10.0, 0.0]), snr=15.0)
+        assert residual.nis == pytest.approx(0.0, abs=1e-9)
 
     def test_a_large_innovation_gives_a_large_nis(self):
         kf = KalmanFilter()
@@ -80,7 +80,7 @@ class TestTheFilterReportsAndUsesIt:
         cov = np.diag([1.0, 1e-5, 1e-4])
         _, _, near = kf.update(state, cov, np.array([10.1, 0.0]), snr=15.0)
         _, _, far = kf.update(state, cov, np.array([14.0, 0.0]), snr=15.0)
-        assert far > near
+        assert far.nis > near.nis
 
     def test_a_wider_scale_grows_the_covariance_faster(self):
         kf = KalmanFilter(dt=1.0)

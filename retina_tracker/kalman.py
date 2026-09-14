@@ -1,6 +1,7 @@
 """Kalman filter over bistatic range for delay-Doppler detections."""
 
 import sys
+from typing import NamedTuple
 
 import numpy as np
 
@@ -31,6 +32,27 @@ def doppler_to_range_rate(doppler_hz):
 
 def range_rate_to_doppler(range_rate_km_s):
     return -range_rate_km_s / WAVELENGTH_KM()
+
+
+class Residual(NamedTuple):
+    """What one update revealed about the filter's own consistency.
+
+    The innovation and its covariance are what R and Q are answerable to: R is
+    the floor of S, and Q sets how fast the state's share of S grows between
+    updates. Returning them rather than the NIS alone is what lets the two be
+    separated from recorded data, which a single scalar cannot do because a
+    too-large R and a too-small Q move it in opposite directions and cancel.
+    """
+
+    innovation: np.ndarray
+    S: np.ndarray
+    nis: float
+
+    @classmethod
+    def degenerate(cls):
+        """A singular S skipped the measurement, so nothing was learned."""
+        nan = np.full(MEASUREMENT_DIM, np.nan)
+        return cls(nan, np.full((MEASUREMENT_DIM, MEASUREMENT_DIM), np.nan), float(MEASUREMENT_DIM))
 
 
 class KalmanFilter:
@@ -128,13 +150,13 @@ class KalmanFilter:
             K = covariance @ self.H.T @ np.linalg.inv(S)
         except np.linalg.LinAlgError:
             print("Warning: Singular innovation covariance in Kalman update, skipping measurement", file=sys.stderr)
-            return state, covariance, float(MEASUREMENT_DIM)
+            return state, covariance, Residual.degenerate()
 
         state_upd = state + K @ innovation
         cov_upd = (np.eye(self.dim_state) - K @ self.H) @ covariance
         nis = float(innovation @ np.linalg.solve(S, innovation))
 
-        return state_upd, _symmetrised(cov_upd), nis
+        return state_upd, _symmetrised(cov_upd), Residual(innovation, S, nis)
 
     def get_innovation_covariance(self, covariance, snr=None):
         S = self.H @ covariance @ self.H.T + self.R * self.measurement_noise_scale(snr)

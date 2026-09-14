@@ -117,6 +117,9 @@ class Track:
         self.n_missed = 0
         self.n_shadow_obs = 1
         self.nis_ema = float(MEASUREMENT_DIM)
+        self.last_dt = None
+        self.last_residual = None
+        self.last_q_scale = 1.0
         self.n_shadowed = 1 if detection.get("shadowed") else 0
 
         self.total_snr = detection["snr"]
@@ -711,6 +714,7 @@ class Track:
 
     def predict(self, dt):
         self.kf.dt = dt
+        self.last_dt = dt
         state_pred, cov_pred = self.kf.predict(self.state, self.covariance, self.process_noise_scale())
         self.state = state_pred
         # Freeze covariance growth once coasting exceeds N_COAST so the
@@ -721,11 +725,14 @@ class Track:
 
     def update(self, detection, timestamp, frame=0):
         measurement = np.array([detection["delay"], doppler_to_range_rate(detection["doppler"])])
-        self.state, self.covariance, nis = self.kf.update(
+        q_scale = self.process_noise_scale()
+        self.state, self.covariance, residual = self.kf.update(
             self.state, self.covariance, measurement, detection.get("snr")
         )
         memory = PROCESS_NOISE_NIS_MEMORY()
-        self.nis_ema = (1.0 - memory) * self.nis_ema + memory * nis
+        self.nis_ema = (1.0 - memory) * self.nis_ema + memory * residual.nis
+        self.last_residual = residual
+        self.last_q_scale = q_scale
 
         # Identity swap check MUST run before adsb_hex capture
         self._check_identity_change_anomaly(detection, timestamp)

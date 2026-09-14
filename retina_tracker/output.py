@@ -104,8 +104,9 @@ class TrackEventWriter:
             "anomaly_types": sorted(anomaly_types) if anomaly_types else [],
             "shadow_fraction": shadow_fraction,
         }
-        line = json.dumps(event) + "\n"
+        self._write_line(json.dumps(event) + "\n")
 
+    def _write_line(self, line):
         if not self._is_stdout and self.max_bytes:
             size = len(line.encode("utf-8"))
             if self.bytes_written and self.bytes_written + size > self.max_bytes:
@@ -129,3 +130,46 @@ class TrackEventWriter:
     def close(self):
         if not self._is_stdout:
             self.output.close()
+
+
+class InnovationWriter(TrackEventWriter):
+    """Writes one record per Kalman update, for calibrating R and Q.
+
+    Off unless a path is given. R and Q cannot be fitted from the events file:
+    it carries the detections that were associated, not what the filter
+    predicted before seeing them, and the difference between those is the only
+    quantity either constant answers to.
+
+    Reconstructing innovations offline by replaying recorded detections works
+    but cannot see the filter's real state, because a replay has to guess at
+    the covariance, the adaptive process-noise scale and the coasting history
+    that shaped each prediction. This records them instead of inferring them.
+
+    Inherits the size bound so a node left recording cannot fill its disk.
+    """
+
+    def write_residual(self, track_id, timestamp, track, detection):
+        residual = track.last_residual
+        if residual is None:
+            return
+
+        record = {
+            "track_id": track_id,
+            "birth": track.birth_timestamp,
+            "timestamp": timestamp,
+            "dt": track.last_dt,
+            "snr": detection.get("snr"),
+            # The measurement, so a record can be filtered on its own. Most
+            # tracks at an interfered site are built on a fixed-Doppler tone
+            # and must be excluded before anything is fitted to them; without
+            # the Doppler here that can only be done by joining back to the
+            # events file, which a track that never confirmed is absent from.
+            "delay": detection.get("delay"),
+            "doppler": detection.get("doppler"),
+            "n_missed": track.n_missed,
+            "q_scale": track.last_q_scale,
+            "innovation": [float(x) for x in residual.innovation],
+            "s_diag": [float(residual.S[0][0]), float(residual.S[1][1])],
+            "nis": residual.nis,
+        }
+        self._write_line(json.dumps(record) + "\n")
