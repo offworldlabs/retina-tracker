@@ -216,7 +216,7 @@ class Tracker:
         for track in self.tracks:
             promoted = track.promote_if_ready()
             if promoted:
-                track.id = Track._generate_id(timestamp, adsb_hex=track.adsb_hex)
+                track.id = Track._generate_id(timestamp)
                 if self.event_writer:
                     _det_n = min(track.n_associated, self.detection_window)
                     if _lazy_write:
@@ -475,7 +475,7 @@ class Tracker:
 
                 track.state[2] = doppler_to_range_rate(doppler_velocity)
 
-                track.id = Track._generate_id(timestamp, adsb_hex=track.adsb_hex)
+                track.id = Track._generate_id(timestamp)
 
                 if self.event_writer:
                     detections_list = track.get_recent_detections(n=track.n_associated)

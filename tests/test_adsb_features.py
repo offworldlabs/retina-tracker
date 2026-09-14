@@ -118,10 +118,10 @@ def test_adsb_tracking():
     assert len(confirmed_tracks) >= 1, "Should have at least 1 confirmed track"
     assert len(adsb_tracks) >= 1, "Should have at least 1 ADS-B track"
 
-    # Verify ADS-B track has ICAO hex in ID
+    # Verify the ADS-B label reaches the track without claiming its identity
     adsb_track = adsb_tracks[0]
     assert adsb_track.adsb_hex == "a12345", f"Expected hex a12345, got {adsb_track.adsb_hex}"
-    assert "A12345" in adsb_track.id, f"Track ID should contain ICAO hex: {adsb_track.id}"
+    assert "A12345" not in adsb_track.id, f"Track ID must not carry the ICAO hex: {adsb_track.id}"
 
     # Verify ADS-B track has lower covariance
     if len(non_adsb_tracks) > 0:
