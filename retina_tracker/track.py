@@ -115,9 +115,10 @@ class Track:
         self.n_frames = 1
         self.n_associated = 0
         self.n_missed = 0
-        self.n_shadow_obs = 1
+        self.n_observations = 1
         self.nis_ema = float(MEASUREMENT_DIM)
         self.n_shadowed = 1 if detection.get("shadowed") else 0
+        self.n_interfering = 1 if detection.get("interfering") else 0
 
         self.total_snr = detection["snr"]
         self.birth_timestamp = timestamp
@@ -739,9 +740,11 @@ class Track:
                 self.adsb_hex = adsb["hex"]
                 self.adsb_initialized = True
 
-        self.n_shadow_obs += 1
+        self.n_observations += 1
         if detection.get("shadowed"):
             self.n_shadowed += 1
+        if detection.get("interfering"):
+            self.n_interfering += 1
 
         self.history["timestamps"].append(timestamp)
         self.history["frames"].append(frame)
@@ -798,7 +801,7 @@ class Track:
         They are kinematically consistent, so the filter cannot reject them;
         only their position relative to a brighter return gives them away.
         """
-        if self.n_shadow_obs < 3:
+        if self.n_observations < 3:
             return False
         return self.shadow_fraction() >= SHADOW_MIN_FRACTION()
 
@@ -811,7 +814,19 @@ class Track:
         tracks ran a median of 0.64. An identified aircraft drifting up from
         zero means the thresholds are wrong here.
         """
-        return self.n_shadowed / max(self.n_shadow_obs, 1)
+        return self.n_shadowed / max(self.n_observations, 1)
+
+    def interference_fraction(self):
+        """Share of this track's detections that sat in an interfering bin.
+
+        This is how the occupancy map is held to account. A track carrying an
+        ADS-B hex is an aircraft whatever the map thinks, so a labelled track
+        reading above zero is the map reaching for something it must not have,
+        and the fraction says how close it came before anything was suppressed.
+        Reported whether or not suppression is on, so the question can be
+        settled from a recording made before it is turned on anywhere.
+        """
+        return self.n_interfering / max(self.n_observations, 1)
 
     def promote_if_ready(self):
         if self.state_status == TrackState.TENTATIVE:
@@ -924,6 +939,7 @@ class Track:
             "duration_sec": duration_sec,
             "continuity": continuity,
             "shadow_fraction": self.shadow_fraction(),
+            "interference_fraction": self.interference_fraction(),
             "birth_timestamp": self.birth_timestamp,
             "death_timestamp": self.death_timestamp,
             "is_anomalous": self.is_anomalous,

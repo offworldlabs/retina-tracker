@@ -9,6 +9,8 @@ from scipy.optimize import linear_sum_assignment
 
 from .config import (
     GATE_THRESHOLD,
+    INTERFERENCE_ENABLED,
+    INTERFERENCE_SUPPRESS,
     M_THRESHOLD,
     MIN_SNR,
     SHADOW_DELAY_KM,
@@ -19,6 +21,7 @@ from .config import (
     TRACKLET_MAX_TIME_SPAN,
     get_config,
 )
+from .interference import DopplerOccupancy
 from .kalman import KalmanFilter, doppler_to_range_rate
 from .track import Track, TrackState
 
@@ -65,6 +68,10 @@ class Tracker:
         self.detection_sink = detection_sink
         self._max_pending_frames = max_pending_classification_frames
         self._pending_classification = deque()
+        # Sized from the capture config at construction, because that is when
+        # --blah2-config has been read. Whether it is consulted at all is read
+        # per frame, as the shadow thresholds are.
+        self.occupancy = DopplerOccupancy.from_config()
 
     def reset(self):
         """Clear in-progress and completed-track state in place, as if
@@ -82,6 +89,7 @@ class Tracker:
         self.completed_tracks.clear()
         self.last_timestamp = None
         self._pending_classification.clear()
+        self.occupancy.clear()
         self._reset_counters()
 
     def _reset_counters(self):
@@ -90,6 +98,7 @@ class Tracker:
         self.n_frames_rejected = 0
         self.n_clock_resyncs = 0
         self.n_backwards = 0
+        self.n_initiations_suppressed = 0
 
     @staticmethod
     def _mark_shadows(detections):
@@ -115,6 +124,24 @@ class Tracker:
                 for other in detections
                 if other is not det
             )
+
+    def _mark_interference(self, detections, timestamp):
+        """Flag detections sitting in a Doppler bin that behaves like a tone.
+
+        Marked whether or not the mark is acted on, so that a node records
+        what a suppressing tracker would have refused alongside the ADS-B
+        labels that say whether refusing it would have cost an aircraft. The
+        map is fed every detection above the SNR floor, including those that
+        associate: once a tone has tracks of its own its detections stop being
+        new, and a map built only from new ones would forget the tone exists.
+        """
+        if not INTERFERENCE_ENABLED():
+            for det in detections:
+                det["interfering"] = False
+            return
+        self.occupancy.observe(detections, timestamp)
+        for det in detections:
+            det["interfering"] = self.occupancy.is_interfering(det.get("doppler"))
 
     def process_frame(self, detections, timestamp):
         """Advance every track by one frame, `timestamp` in milliseconds.
@@ -150,6 +177,7 @@ class Tracker:
         detections = kept
 
         self._mark_shadows(detections)
+        self._mark_interference(detections, timestamp)
 
         for track in self.tracks:
             track.predict(dt)
@@ -191,6 +219,7 @@ class Tracker:
                         max_velocity_ms=track.max_velocity_ms,
                         anomaly_types=track.anomaly_types,
                         shadow_fraction=track.shadow_fraction(),
+                        interference_fraction=track.interference_fraction(),
                     )
                 else:
                     detections_window = track.get_recent_detections(n=self.detection_window)
@@ -205,6 +234,7 @@ class Tracker:
                         max_velocity_ms=track.max_velocity_ms,
                         anomaly_types=track.anomaly_types,
                         shadow_fraction=track.shadow_fraction(),
+                        interference_fraction=track.interference_fraction(),
                     )
 
         for i, track in enumerate(self.tracks):
@@ -245,8 +275,23 @@ class Tracker:
                             anomaly_types=track.anomaly_types,
                         )
 
+        # Initiation only. A detection in an interfering bin that an
+        # established track claimed was associated above and is already in,
+        # exactly as it would be crossing blah2's own notch, so an aircraft
+        # flying through the interferer keeps the track it arrived with. What
+        # is refused is letting the interferer start tracks of its own, which
+        # is the only stage that can refuse them: an artefact track's
+        # kinematics are flawless, because a tone puts a detection at every
+        # delay in every frame and the track finds one exactly where it
+        # predicted, so nothing downstream has grounds to reject it.
+        suppress = INTERFERENCE_SUPPRESS()
+        suppressed = []
         for i, det in enumerate(detections):
             if i not in associated_detections:
+                if suppress and det.get("interfering"):
+                    self.n_initiations_suppressed += 1
+                    suppressed.append(det)
+                    continue
                 new_track = Track(det, timestamp, self.kf, frame=self.frame_count, config=self.config)
                 self.tracks.append(new_track)
                 if landed_in is not None:
@@ -283,7 +328,7 @@ class Tracker:
         # After deletions and promotions, so this frame's own tracks may
         # already have settled.
         if self.detection_sink is not None:
-            self._classify_frame(timestamp, landed_in, detections, below_snr)
+            self._classify_frame(timestamp, landed_in, detections, below_snr, suppressed)
 
         resync = self.n_backwards >= BACKWARDS_RUN_BEFORE_RESYNC
         if self.last_timestamp is None or timestamp > self.last_timestamp or resync:
@@ -292,12 +337,17 @@ class Tracker:
                 self.n_backwards = 0
             self.last_timestamp = timestamp
 
-    def _classify_frame(self, timestamp, landed_in, detections, below_snr):
+    def _classify_frame(self, timestamp, landed_in, detections, below_snr, suppressed):
         """Queue one frame's detections for classification, then drain.
 
         Splitting queue from drain is what keeps the stream in frame order:
         entries are only ever released from the front, so a consumer can
         append what it receives and rely on it being ordered by timestamp.
+
+        A suppressed detection is carried separately because it is the one
+        kind with no track to wait on. Its verdict is already final, and it is
+        unassociated, which is what it is: it was refused a track of its own
+        and no existing track claimed it.
         """
         self._pending_classification.append(
             {
@@ -305,6 +355,7 @@ class Tracker:
                 "frame": self.frame_count,
                 "pairs": [(det, landed_in[i]) for i, det in enumerate(detections) if i in landed_in],
                 "below_snr": below_snr,
+                "suppressed": suppressed,
             }
         )
         self._drain_classifications()
@@ -338,7 +389,7 @@ class Tracker:
                 break
 
             associated = []
-            unassociated = []
+            unassociated = list(entry["suppressed"])
             for det, track in entry["pairs"]:
                 # On an aged-out frame a still-tentative track reads as
                 # unassociated, which is the true answer so far.
@@ -490,6 +541,7 @@ class Tracker:
                         max_velocity_ms=track.max_velocity_ms,
                         anomaly_types=track.anomaly_types,
                         shadow_fraction=track.shadow_fraction(),
+                        interference_fraction=track.interference_fraction(),
                     )
 
     def _merge_tracks(self):

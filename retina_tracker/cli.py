@@ -241,10 +241,11 @@ def main():
         set_config(load_config(args.config))
 
     if args.blah2_config:
-        fc = load_blah2_config(args.blah2_config)
-        if fc is not None:
-            config = get_config()
-            config["radar"]["center_frequency"] = fc
+        capture = load_blah2_config(args.blah2_config)
+        config = get_config()
+        for key, setting in (("fc", "center_frequency"), ("fs", "sample_rate"), ("cpi", "cpi")):
+            if key in capture:
+                config["radar"][setting] = capture[key]
 
     event_writer = None
     if args.stream_output:

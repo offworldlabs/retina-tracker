@@ -11,11 +11,17 @@ tracker:
   gate_threshold: 9.0     # Chi-squared gate (99% confidence)
   detection_window: 20    # Rolling detection window for streaming output
 
-# Radar geometry. center_frequency must match the node's blah2 capture.fc:
-# it sets the wavelength that converts Doppler into bistatic range rate, so a
-# wrong value biases every track's velocity by the same ratio.
+# Radar geometry and the resolution cell. All three must match the node's own
+# blah2 capture, and --blah2-config reads them straight out of it, which is the
+# only way they should be set on a node: what is here is the standalone default.
+# center_frequency sets the wavelength that converts Doppler into bistatic range
+# rate, so a wrong value biases every track's velocity by the same ratio.
+# sample_rate and cpi give the resolution cell, c/fs by 1/cpi, which is the unit
+# every threshold over delay and Doppler is expressed in.
 radar:
   center_frequency: 177000000
+  sample_rate: 2000000    # capture.fs — one delay cell is c/fs, here 150 m
+  cpi: 0.5                # process.data.cpi — one Doppler bin is 1/cpi, here 2 Hz
 
 # Process noise. Bistatic range acceleration is dominated by geometry rather
 # than by the aircraft, so it differs more between sites than between flight
@@ -39,6 +45,26 @@ shadow:
   delay_km: 3.0          # how far behind a brighter return counts as shadowed
   snr_margin_db: 3.0     # how much brighter that return must be
   min_fraction: 0.5      # shadowed share of a track's detections that blocks promotion
+
+# Interference suppression. A node's own CW interference is site-specific and
+# cannot be shipped: one node's dominant tone sits at +27.9 Hz and another's at a
+# pair around -60 Hz, so a notch tuned on either misses the other. What is shared
+# is the shape of the evidence, so the map is learned at runtime and a node with
+# nothing to learn suppresses nothing. Measured 2026-09-14: the tone accounted
+# for 92.5% of frames at one node and 38.9% at the other, spread over 12 and 7
+# delay cells, against a clean node's 18.3% and 2 cells, and it had built 76% and
+# 70% of all tracks.
+#
+# suppress is off until the map has been validated against ADS-B labels at both
+# nodes. Marking runs regardless, so a recording carries what suppression would
+# have refused next to the labels that say what refusing it would have cost.
+interference:
+  enabled: true                 # learn the map and mark detections against it
+  suppress: false               # refuse those detections a track of their own
+  window_s: 60.0                # rolling window; nothing is judged until it fills
+  min_frame_fraction: 0.3       # share of frames a bin must hold to be suspect
+  max_delay_spread_cells: 3.0   # scatter in delay, once the bin's own Doppler drift is removed
+  min_samples: 6                # detections needed before that scatter means anything
 
 # Tracklet initiation thresholds
 tracklet:

@@ -7,30 +7,41 @@ import yaml
 
 
 def load_blah2_config(blah2_config_path):
-    """Load center frequency from blah2 config file.
+    """Read the capture parameters the tracker's own constants derive from.
+
+    `fs` and `cpi` size the resolution cell, `c/fs` by `1/cpi`, which is the
+    unit every threshold over delay and Doppler is expressed in. Reading them
+    from the node's own blah2 config is what lets one set of constants run
+    everywhere: a node captured differently gets differently sized cells
+    without anyone editing a threshold.
 
     Args:
         blah2_config_path: Path to blah2 config.yml file
 
     Returns:
-        Center frequency in Hz, or None if not found
+        Dict of whichever of fc, fs and cpi were found. Empty if none were.
     """
     try:
         with open(blah2_config_path) as f:
             config = yaml.safe_load(f)
-        fc = config.get("capture", {}).get("fc")
-        if fc is not None:
+        found = {
+            "fc": config.get("capture", {}).get("fc"),
+            "fs": config.get("capture", {}).get("fs"),
+            "cpi": config.get("process", {}).get("data", {}).get("cpi"),
+        }
+        found = {k: v for k, v in found.items() if v is not None}
+        if found:
             print(
-                f"Loaded center frequency {fc / 1e6:.1f} MHz from {blah2_config_path}",
+                f"Loaded capture parameters {found} from {blah2_config_path}",
                 file=sys.stderr,
             )
-        return fc
-    except (OSError, yaml.YAMLError) as e:
+        return found
+    except (OSError, yaml.YAMLError, AttributeError) as e:
         print(
             f"Warning: Failed to load blah2 config from {blah2_config_path}: {e}",
             file=sys.stderr,
         )
-        return None
+        return {}
 
 
 def load_config(config_path=None):
@@ -58,6 +69,14 @@ def load_config(config_path=None):
         "process_noise": {"range_jerk": 1e-7, "adaptive": True, "max_scale": 25.0, "nis_memory": 0.25},
         "tracklet": {"max_delay_residual": 2.0, "max_doppler_residual": 10.0, "max_time_span": 3.0},
         "shadow": {"enabled": True, "delay_km": 3.0, "snr_margin_db": 3.0, "min_fraction": 0.5},
+        "interference": {
+            "enabled": True,
+            "suppress": False,
+            "window_s": 60.0,
+            "min_frame_fraction": 0.3,
+            "max_delay_spread_cells": 3.0,
+            "min_samples": 6,
+        },
         "adsb": {
             "enabled": False,
             "priority": True,
@@ -67,6 +86,8 @@ def load_config(config_path=None):
         "radar": {
             "blah2_config": None,
             "center_frequency": 200000000,
+            "sample_rate": 2000000,
+            "cpi": 0.5,
         },
         "tcp": {
             "host": "0.0.0.0",
@@ -164,6 +185,59 @@ def CENTER_FREQUENCY_HZ():
 
 def WAVELENGTH_KM():
     return SPEED_OF_LIGHT / CENTER_FREQUENCY_HZ() / 1000.0
+
+
+def SAMPLE_RATE_HZ():
+    return _get_param("radar", "sample_rate", 2000000)
+
+
+def CPI_S():
+    return _get_param("radar", "cpi", 0.5)
+
+
+def DELAY_CELL_KM():
+    """The width of one delay resolution cell, in kilometres of bistatic range.
+
+    Set by the capture bandwidth alone, so it is read from blah2's config
+    rather than configured here. Thresholds over delay are expressed in these
+    cells so that the same number means the same thing at a node sampling
+    differently.
+    """
+    return SPEED_OF_LIGHT / SAMPLE_RATE_HZ() / 1000.0
+
+
+def DOPPLER_BIN_HZ():
+    """The width of one Doppler resolution cell, in Hz.
+
+    The reciprocal of the coherent processing interval, and the companion of
+    DELAY_CELL_KM: together they are the resolution cell blah2's detector
+    reports in.
+    """
+    return 1.0 / CPI_S()
+
+
+def INTERFERENCE_ENABLED():
+    return _get_param("interference", "enabled", True)
+
+
+def INTERFERENCE_SUPPRESS():
+    return _get_param("interference", "suppress", False)
+
+
+def INTERFERENCE_WINDOW_S():
+    return _get_param("interference", "window_s", 60.0)
+
+
+def INTERFERENCE_MIN_FRAME_FRACTION():
+    return _get_param("interference", "min_frame_fraction", 0.3)
+
+
+def INTERFERENCE_MAX_DELAY_SPREAD_CELLS():
+    return _get_param("interference", "max_delay_spread_cells", 3.0)
+
+
+def INTERFERENCE_MIN_SAMPLES():
+    return _get_param("interference", "min_samples", 6)
 
 
 def PROCESS_NOISE_JERK():
