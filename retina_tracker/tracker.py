@@ -8,6 +8,12 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from .config import (
+    DELAY_CELL_KM,
+    DELAY_MAX_KM,
+    DELAY_MIN_KM,
+    DOPPLER_BIN_HZ,
+    DOPPLER_MAX_HZ,
+    DOPPLER_MIN_HZ,
     GATE_THRESHOLD,
     INTERFERENCE_ENABLED,
     INTERFERENCE_SUPPRESS,
@@ -20,6 +26,7 @@ from .config import (
     TRACKLET_MAX_DOPPLER_RESIDUAL,
     TRACKLET_MAX_TIME_SPAN,
     get_config,
+    ordered_bounds,
 )
 from .interference import DopplerOccupancy
 from .kalman import KalmanFilter, doppler_to_range_rate
@@ -104,6 +111,7 @@ class Tracker:
         self.n_clock_resyncs = 0
         self.n_backwards = 0
         self.n_initiations_suppressed = 0
+        self.n_detections_rejected = 0
 
     @staticmethod
     def _mark_shadows(detections):
@@ -129,6 +137,63 @@ class Tracker:
                 for other in detections
                 if other is not det
             )
+
+    def _reject_impossible(self, detections):
+        """Drop what the node cannot have measured.
+
+        blah2 computes its ambiguity map over a delay and Doppler span it is
+        told, so a detection outside that span did not come from the map. It
+        is a malformed frame, and the tracker is the trust boundary: nothing
+        upstream of here has checked. A non-finite delay or Doppler is the
+        same case, and would otherwise reach the filter and put a NaN through
+        a covariance rather than being rejected.
+
+        SNR is only type-checked, deliberately. A NaN SNR still has a real
+        delay and Doppler, and the partition below already routes it to
+        below_snr on purpose, which keeps it in the record rather than
+        vanishing it here.
+
+        Each bound is widened by one resolution cell, because the centroider
+        interpolates between bin centres and a real peak in the outermost bin
+        can land just outside it.
+
+        Bounds are only applied when the node has said what they are. An
+        invented bound is worse than none: it discards real detections and
+        looks like a quiet sky. This is why every one of them defaults to
+        None rather than to a plausible number.
+
+        Counted rather than logged per detection. A node whose span is
+        misconfigured would otherwise write a line per detection per frame,
+        and the count is what makes the problem visible either way.
+        """
+        doppler_min, doppler_max = ordered_bounds(DOPPLER_MIN_HZ(), DOPPLER_MAX_HZ())
+        delay_min, delay_max = ordered_bounds(DELAY_MIN_KM(), DELAY_MAX_KM())
+        doppler_slack = DOPPLER_BIN_HZ()
+        delay_slack = DELAY_CELL_KM()
+
+        kept = []
+        for det in detections:
+            delay, doppler, snr = det.get("delay"), det.get("doppler"), det.get("snr")
+            if not all(isinstance(v, numbers.Real) and math.isfinite(v) for v in (delay, doppler)):
+                self.n_detections_rejected += 1
+                continue
+            if not isinstance(snr, numbers.Real):
+                self.n_detections_rejected += 1
+                continue
+            if doppler_min is not None and doppler < doppler_min - doppler_slack:
+                self.n_detections_rejected += 1
+                continue
+            if doppler_max is not None and doppler > doppler_max + doppler_slack:
+                self.n_detections_rejected += 1
+                continue
+            if delay_min is not None and delay < delay_min - delay_slack:
+                self.n_detections_rejected += 1
+                continue
+            if delay_max is not None and delay > delay_max + delay_slack:
+                self.n_detections_rejected += 1
+                continue
+            kept.append(det)
+        return kept
 
     def _mark_interference(self, detections, timestamp):
         """Flag detections sitting in a Doppler bin that behaves like a tone.
@@ -174,6 +239,8 @@ class Tracker:
         # see". A single loop rather than two comprehensions so that every
         # detection lands in exactly one bucket even when snr is NaN, which
         # fails both comparisons.
+        detections = self._reject_impossible(detections)
+
         min_snr = MIN_SNR()
         below_snr = []
         kept = []
