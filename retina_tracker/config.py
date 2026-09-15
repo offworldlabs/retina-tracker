@@ -41,6 +41,15 @@ def load_blah2_config(blah2_config_path):
             "delayMax": ambiguity.get("delayMax"),
         }
         found = {k: v for k, v in found.items() if v is not None}
+        for lo, hi in (("dopplerMin", "dopplerMax"), ("delayMin", "delayMax")):
+            if lo in found and hi in found and found[lo] > found[hi]:
+                print(
+                    f"Warning: {lo} {found[lo]} is above {hi} {found[hi]} in {blah2_config_path}; "
+                    "ignoring both. A transposed pair is not a bound, and honouring it would "
+                    "reject every detection and read as an empty sky.",
+                    file=sys.stderr,
+                )
+                del found[lo], found[hi]
         if found:
             print(
                 f"Loaded capture parameters {found} from {blah2_config_path}",
@@ -241,6 +250,19 @@ def DOPPLER_MIN_HZ():
 
 def DOPPLER_MAX_HZ():
     return _get_param("radar", "doppler_max")
+
+
+def ordered_bounds(lo, hi):
+    """A pair that is not ordered is not a bound, it is a typo.
+
+    Honouring it rejects every detection and leaves a node that looks dead
+    rather than misconfigured, which is the one failure this whole mechanism
+    exists to avoid. Dropped to unknown instead, which is what it is. A pair
+    with only one half stated is kept: that half is a real statement.
+    """
+    if lo is not None and hi is not None and lo > hi:
+        return None, None
+    return lo, hi
 
 
 def _delay_bound_km(key):

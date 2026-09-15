@@ -168,6 +168,65 @@ class TestRejectingWhatTheNodeCannotHaveSeen:
         assert tracker.n_detections_rejected == 0
 
 
+class TestABoundThatIsNotABound:
+    """The failure this whole mechanism exists to avoid is a node that looks
+    dead rather than misconfigured, so a nonsense bound must not be honoured."""
+
+    def test_a_transposed_pair_rejects_nothing(self):
+        """dopplerMin above dopplerMax is a typo. Honouring it would reject
+        every detection at the node and read as an empty sky."""
+        set_config(build_config(doppler_min=300, doppler_max=-300))
+        tracker = run(Tracker(config=None), [det(20.0, d) for d in (-400.0, 0.0, 400.0)])
+        assert tracker.n_detections_rejected == 0
+
+    def test_a_transposed_pair_is_dropped_where_it_is_read(self, tmp_path):
+        """Twice over: at the config, so the node says so once at startup, and
+        at the bound, so a hand-edited tracker config cannot do it either."""
+        path = tmp_path / "config.yml"
+        path.write_text(
+            "capture:\n  fs: 2000000\n  fc: 213000000\n"
+            "process:\n  data:\n    cpi: 0.5\n"
+            "  ambiguity:\n    dopplerMin: 300\n    dopplerMax: -300\n"
+        )
+        found = load_blah2_config(str(path))
+        assert "dopplerMin" not in found and "dopplerMax" not in found
+        assert found["fc"] == 213000000
+
+    def test_half_a_pair_is_still_a_statement(self):
+        """Unlike an axis, which needs both ends, a single stated bound is a
+        real limit and is worth holding a detection to."""
+        set_config(build_config(doppler_min=-300))
+        tracker = run(Tracker(config=None), [det(20.0, -400.0), det(20.0, 400.0)])
+        assert tracker.n_detections_rejected == 1
+
+    def test_a_zero_width_span_admits_only_its_own_bin(self):
+        """Degenerate but not nonsense: a node computing a single Doppler bin.
+        One cell of slack either side, as everywhere else."""
+        set_config(build_config(doppler_min=0, doppler_max=0))
+        tracker = run(Tracker(config=None), [det(20.0, 0.0), det(20.0, 50.0)])
+        assert tracker.n_detections_rejected == 1
+
+    @pytest.mark.parametrize("lo,hi", [(0, 0), (-1, 1), (-15, 15), (-200, 200), (-300, 300), (-1000, 1000)])
+    def test_every_span_across_the_range_holds_its_own_line(self, lo, hi):
+        """0 to 1000 Hz, symmetric. What is inside is kept and what is outside
+        is rejected, with no case left to the reader's imagination."""
+        set_config(build_config(doppler_min=lo, doppler_max=hi))
+        slack = DOPPLER_BIN_HZ()
+        candidates = [float(d) for d in range(-1200, 1201, 25)]
+        expected = sum(1 for d in candidates if not (lo - slack <= d <= hi + slack))
+        tracker = run(Tracker(config=None), [det(20.0, d) for d in candidates])
+        assert tracker.n_detections_rejected == expected
+
+    @pytest.mark.parametrize("lo,hi", [(-100, 300), (0, 300), (-300, 0)])
+    def test_an_asymmetric_span_is_not_assumed_symmetric(self, lo, hi):
+        set_config(build_config(doppler_min=lo, doppler_max=hi))
+        slack = DOPPLER_BIN_HZ()
+        candidates = [float(d) for d in range(-1200, 1201, 25)]
+        expected = sum(1 for d in candidates if not (lo - slack <= d <= hi + slack))
+        tracker = run(Tracker(config=None), [det(20.0, d) for d in candidates])
+        assert tracker.n_detections_rejected == expected
+
+
 class TestTheMapWidensWithTheSpan:
     """The same tone, at three spans, with nothing changed but the span."""
 

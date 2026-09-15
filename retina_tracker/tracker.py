@@ -26,6 +26,7 @@ from .config import (
     TRACKLET_MAX_DOPPLER_RESIDUAL,
     TRACKLET_MAX_TIME_SPAN,
     get_config,
+    ordered_bounds,
 )
 from .interference import DopplerOccupancy
 from .kalman import KalmanFilter, doppler_to_range_rate
@@ -165,8 +166,8 @@ class Tracker:
         misconfigured would otherwise write a line per detection per frame,
         and the count is what makes the problem visible either way.
         """
-        doppler_min, doppler_max = DOPPLER_MIN_HZ(), DOPPLER_MAX_HZ()
-        delay_min, delay_max = DELAY_MIN_KM(), DELAY_MAX_KM()
+        doppler_min, doppler_max = ordered_bounds(DOPPLER_MIN_HZ(), DOPPLER_MAX_HZ())
+        delay_min, delay_max = ordered_bounds(DELAY_MIN_KM(), DELAY_MAX_KM())
         doppler_slack = DOPPLER_BIN_HZ()
         delay_slack = DELAY_CELL_KM()
 
