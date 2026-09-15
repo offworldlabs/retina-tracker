@@ -49,6 +49,7 @@ class Tracker:
         max_completed_tracks=MAX_COMPLETED_TRACKS,
         detection_sink=None,
         max_pending_classification_frames=MAX_PENDING_CLASSIFICATION_FRAMES,
+        innovation_writer=None,
     ):
         self.kf = KalmanFilter()
         self.tracks = []
@@ -63,6 +64,10 @@ class Tracker:
         # (see _drain_classifications). None costs nothing: the bookkeeping is
         # skipped entirely rather than computed and dropped.
         self.detection_sink = detection_sink
+        # Optional. Receives one record per Kalman update so R and Q can be
+        # calibrated from what the filter actually predicted. None costs
+        # nothing: no record is built rather than built and dropped.
+        self.innovation_writer = innovation_writer
         self._max_pending_frames = max_pending_classification_frames
         self._pending_classification = deque()
 
@@ -170,6 +175,8 @@ class Tracker:
             track = self.tracks[track_idx]
             det = detections[det_idx]
             track.update(det, timestamp, frame=self.frame_count)
+            if self.innovation_writer:
+                self.innovation_writer.write_residual(track.id, timestamp, track, det)
             if track.state_status == TrackState.COASTING:
                 track.state_status = TrackState.ACTIVE
             associated_tracks.add(track_idx)

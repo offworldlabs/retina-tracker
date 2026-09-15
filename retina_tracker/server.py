@@ -170,6 +170,7 @@ def run_tcp_server(
     control_port=CONTROL_PORT,
     history_window_s=WINDOW_S,
     history_max_points=MAX_POINTS,
+    innovation_writer=None,
 ):
     """Run tracker as TCP server receiving detection frames from blah2.
 
@@ -183,6 +184,7 @@ def run_tcp_server(
         control_port: Port for the HTTP control surface; 0 disables it
         history_window_s: How much of the recent past to keep in memory
         history_max_points: Hard ceiling per detection class, whatever the rate
+        innovation_writer: InnovationWriter for R/Q calibration, or None
     """
     # In memory rather than on disk: it does not need to survive a restart,
     # and the alternative was several hundred megabytes a day onto an SD card.
@@ -195,6 +197,7 @@ def run_tcp_server(
         detection_window=detection_window,
         config=config or get_config(),
         detection_sink=history,
+        innovation_writer=innovation_writer,
     )
     start_pruner(history)
 

@@ -14,7 +14,7 @@ from .config import (
     load_config,
     set_config,
 )
-from .output import TrackEventWriter
+from .output import InnovationWriter, TrackEventWriter
 from .server import run_tcp_server
 from .tracker import UNBOUNDED_ARCHIVE, Tracker
 
@@ -47,7 +47,7 @@ def load_detections(filepath):
     return []
 
 
-def process_detections(detections_file, event_writer=None, detection_window=20):
+def process_detections(detections_file, event_writer=None, detection_window=20, innovation_writer=None):
     """Process all detections and generate tracks."""
     output = sys.stderr if event_writer and event_writer._is_stdout else sys.stdout
 
@@ -60,6 +60,7 @@ def process_detections(detections_file, event_writer=None, detection_window=20):
         detection_window=detection_window,
         config=get_config(),
         max_completed_tracks=UNBOUNDED_ARCHIVE,
+        innovation_writer=innovation_writer,
     )
 
     for i, frame in enumerate(detection_frames):
@@ -199,6 +200,13 @@ def main():
         default=20,
         help="Number of detections to include in sliding window (default: 20)",
     )
+    parser.add_argument(
+        "--innovations",
+        type=str,
+        help="Output file for per-update innovation records, for calibrating R and Q. "
+        "Off unless given: the events file records what was associated, not what "
+        "the filter predicted beforehand, and only the difference constrains either.",
+    )
     parser.add_argument("-c", "--config", type=str, help="Path to configuration file (default: config.yaml)")
     parser.add_argument("--blah2-config", type=str, help="Path to blah2 config.yml to read center frequency (fc)")
 
@@ -256,6 +264,14 @@ def main():
     elif args.tcp:
         event_writer = TrackEventWriter("-")
 
+    innovation_writer = None
+    if args.innovations:
+        innovation_writer = InnovationWriter(
+            args.innovations,
+            max_bytes=OUTPUT_MAX_BYTES(),
+            backup_count=OUTPUT_BACKUP_COUNT(),
+        )
+
     if args.tcp:
         run_tcp_server(
             host=args.tcp_host,
@@ -267,12 +283,20 @@ def main():
             control_port=args.control_port,
             history_window_s=args.history_window,
             history_max_points=args.history_max_points,
+            innovation_writer=innovation_writer,
         )
     else:
-        tracker = process_detections(args.file, event_writer=event_writer, detection_window=args.detection_window)
+        tracker = process_detections(
+            args.file,
+            event_writer=event_writer,
+            detection_window=args.detection_window,
+            innovation_writer=innovation_writer,
+        )
 
         if event_writer:
             event_writer.close()
+        if innovation_writer:
+            innovation_writer.close()
 
         save_tracks(tracker, args.output)
 
