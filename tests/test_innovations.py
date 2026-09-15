@@ -93,6 +93,7 @@ class TestRecordsReachTheFile:
             "snr",
             "delay",
             "doppler",
+            "interfering",
             "n_missed",
             "q_scale",
             "innovation",
