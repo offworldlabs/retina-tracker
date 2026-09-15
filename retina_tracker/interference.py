@@ -156,7 +156,15 @@ class DopplerOccupancy:
     def _spread_exceeded_in(self, bin_index):
         """Whether this bin's delay scatter is too wide, recomputed on a
         stagger. A bin is measured the first time it is asked about, so a new
-        interferer is never judged on a stale verdict it does not have."""
+        interferer is never judged on a stale verdict it does not have.
+
+        Only bins that are occupied enough to be judged get here at all, so a
+        bin whose occupancy oscillates around the floor can hold its verdict
+        for longer than the refresh interval. That is harmless: on every frame
+        it spends below the floor it is not convicted whatever its spread says,
+        and the frame it comes back up is a frame its verdict is asked for
+        again.
+        """
         due = (self._frame_index + bin_index) % SPREAD_REFRESH_FRAMES == 0
         if due or bin_index not in self._spread_exceeded:
             self._spread_exceeded[bin_index] = self.delay_spread_cells(bin_index) > self.max_delay_spread_cells
