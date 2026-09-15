@@ -256,7 +256,15 @@ def main():
     if args.blah2_config:
         capture = load_blah2_config(args.blah2_config)
         config = get_config()
-        for key, setting in (("fc", "center_frequency"), ("fs", "sample_rate"), ("cpi", "cpi")):
+        for key, setting in (
+            ("fc", "center_frequency"),
+            ("fs", "sample_rate"),
+            ("cpi", "cpi"),
+            ("dopplerMin", "doppler_min"),
+            ("dopplerMax", "doppler_max"),
+            ("delayMin", "delay_min_bins"),
+            ("delayMax", "delay_max_bins"),
+        ):
             if key in capture:
                 config["radar"][setting] = capture[key]
 

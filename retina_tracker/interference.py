@@ -18,6 +18,17 @@ from .kalman import doppler_to_range_rate
 
 SPREAD_PERCENTILES = (10, 90)
 
+# How often a bin's delay spread is recomputed, in frames. Occupancy is a
+# counter and is exact every frame; the spread is a percentile over the whole
+# window and is the only part whose cost grows with the number of bins a node
+# can see. A window turns over one frame at a time, so a verdict is stable
+# across far more than this: at a 60 s window and a 0.5 s CPI, ten frames is
+# five seconds of staleness against sixty seconds of evidence. Bins are
+# staggered by index so each frame refreshes a tenth of them rather than all
+# of them at once, which is what keeps the per-frame cost flat as the Doppler
+# span widens.
+SPREAD_REFRESH_FRAMES = 10
+
 
 class DopplerOccupancy:
     """Which Doppler bins are behaving like a tone rather than like traffic.
@@ -86,6 +97,8 @@ class DopplerOccupancy:
         self._frames_occupied = defaultdict(int)
         self._samples = defaultdict(deque)
         self._interfering = frozenset()
+        self._spread_exceeded = {}
+        self._frame_index = 0
 
     def _bin(self, doppler):
         return math.floor(doppler / self.doppler_bin_hz + 0.5)
@@ -117,6 +130,7 @@ class DopplerOccupancy:
                     del self._frames_occupied[bin_index]
                     del self._samples[bin_index]
 
+        self._frame_index += 1
         self._interfering = self._judge()
 
     def _judge(self):
@@ -132,11 +146,21 @@ class DopplerOccupancy:
             return frozenset()
 
         needed = self.min_frame_fraction * self.window_frames
+        self._spread_exceeded = {b: v for b, v in self._spread_exceeded.items() if b in self._frames_occupied}
         return frozenset(
             bin_index
             for bin_index, occupied in self._frames_occupied.items()
-            if occupied >= needed and self.delay_spread_cells(bin_index) > self.max_delay_spread_cells
+            if occupied >= needed and self._spread_exceeded_in(bin_index)
         )
+
+    def _spread_exceeded_in(self, bin_index):
+        """Whether this bin's delay scatter is too wide, recomputed on a
+        stagger. A bin is measured the first time it is asked about, so a new
+        interferer is never judged on a stale verdict it does not have."""
+        due = (self._frame_index + bin_index) % SPREAD_REFRESH_FRAMES == 0
+        if due or bin_index not in self._spread_exceeded:
+            self._spread_exceeded[bin_index] = self.delay_spread_cells(bin_index) > self.max_delay_spread_cells
+        return self._spread_exceeded[bin_index]
 
     def delay_spread_cells(self, bin_index):
         """Scatter in delay about the drift this bin's Doppler mandates.

@@ -22,6 +22,17 @@ radar:
   center_frequency: 177000000
   sample_rate: 2000000    # capture.fs — one delay cell is c/fs, here 150 m
   cpi: 0.5                # process.data.cpi — one Doppler bin is 1/cpi, here 2 Hz
+  # What the node can see, from process.ambiguity. A different question from
+  # how finely it sees it: the span is a deployment choice and has run at 200,
+  # 300 and 1000 Hz across the fleet, while the bin width above is fixed by the
+  # CPI. Left unset here on purpose. These bound what a detection may be and
+  # what an axis may be drawn over, and an invented bound silently discards
+  # real detections, so "nobody has said" has to stay distinguishable from a
+  # plausible number.
+  doppler_min:            # process.ambiguity.dopplerMin, Hz
+  doppler_max:            # process.ambiguity.dopplerMax, Hz
+  delay_min_bins:         # process.ambiguity.delayMin, in delay bins
+  delay_max_bins:         # process.ambiguity.delayMax, in delay bins
 
 # Process noise. Bistatic range acceleration is dominated by geometry rather
 # than by the aircraft, so it differs more between sites than between flight

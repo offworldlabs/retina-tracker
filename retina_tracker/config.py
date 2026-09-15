@@ -15,19 +15,30 @@ def load_blah2_config(blah2_config_path):
     everywhere: a node captured differently gets differently sized cells
     without anyone editing a threshold.
 
+    The ambiguity bounds say what the node can see at all, which is a
+    different question from how finely it sees it. They are the only honest
+    limit to validate an arriving detection against, and the only honest range
+    to draw an axis over: a plot scaled to the data cannot distinguish a
+    quiet sky from a narrow one.
+
     Args:
         blah2_config_path: Path to blah2 config.yml file
 
     Returns:
-        Dict of whichever of fc, fs and cpi were found. Empty if none were.
+        Dict of whichever parameters were found. Empty if none were.
     """
     try:
         with open(blah2_config_path) as f:
             config = yaml.safe_load(f)
+        ambiguity = config.get("process", {}).get("ambiguity", {}) or {}
         found = {
             "fc": config.get("capture", {}).get("fc"),
             "fs": config.get("capture", {}).get("fs"),
             "cpi": config.get("process", {}).get("data", {}).get("cpi"),
+            "dopplerMin": ambiguity.get("dopplerMin"),
+            "dopplerMax": ambiguity.get("dopplerMax"),
+            "delayMin": ambiguity.get("delayMin"),
+            "delayMax": ambiguity.get("delayMax"),
         }
         found = {k: v for k, v in found.items() if v is not None}
         if found:
@@ -88,6 +99,14 @@ def load_config(config_path=None):
             "center_frequency": 200000000,
             "sample_rate": 2000000,
             "cpi": 0.5,
+            # What the node can see, from blah2's ambiguity bounds. None means
+            # nobody has said, and nothing may be rejected or drawn on that
+            # basis: a guessed bound is worse than no bound, because it
+            # discards real detections silently.
+            "doppler_min": None,
+            "doppler_max": None,
+            "delay_min_bins": None,
+            "delay_max_bins": None,
         },
         "tcp": {
             "host": "0.0.0.0",
@@ -214,6 +233,33 @@ def DOPPLER_BIN_HZ():
     reports in.
     """
     return 1.0 / CPI_S()
+
+
+def DOPPLER_MIN_HZ():
+    return _get_param("radar", "doppler_min")
+
+
+def DOPPLER_MAX_HZ():
+    return _get_param("radar", "doppler_max")
+
+
+def _delay_bound_km(key):
+    bins = _get_param("radar", key)
+    return None if bins is None else bins * DELAY_CELL_KM()
+
+
+def DELAY_MIN_KM():
+    """The shortest bistatic range the node computes, in km.
+
+    blah2 states its ambiguity bounds in delay bins, which are only kilometres
+    once the sample rate says how wide a bin is. Converting here keeps every
+    consumer in the units the detections arrive in.
+    """
+    return _delay_bound_km("delay_min_bins")
+
+
+def DELAY_MAX_KM():
+    return _delay_bound_km("delay_max_bins")
 
 
 def INTERFERENCE_ENABLED():

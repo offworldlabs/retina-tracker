@@ -98,6 +98,10 @@ class _Handler(BaseHTTPRequestHandler):
                     "ok": True,
                     "frames": self.server.tracker.frame_count,
                     "tracks": len(self.server.tracker.tracks),
+                    # Detections the node could not have measured, so a span
+                    # that does not match what blah2 is actually producing is
+                    # visible here rather than only as a quiet sky.
+                    "detections_rejected": self.server.tracker.n_detections_rejected,
                 }
             if self.server.history is not None:
                 payload["history"] = self.server.history.stats()
