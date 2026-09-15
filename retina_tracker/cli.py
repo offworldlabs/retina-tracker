@@ -208,7 +208,12 @@ def main():
         "the filter predicted beforehand, and only the difference constrains either.",
     )
     parser.add_argument("-c", "--config", type=str, help="Path to configuration file (default: config.yaml)")
-    parser.add_argument("--blah2-config", type=str, help="Path to blah2 config.yml to read center frequency (fc)")
+    parser.add_argument(
+        "--blah2-config",
+        type=str,
+        help="Path to blah2 config.yml to read the capture parameters the tracker derives from: "
+        "fc for the wavelength, and fs and cpi for the resolution cell.",
+    )
 
     parser.add_argument("--tcp", action="store_true", help="Run as TCP server for streaming input from blah2")
     parser.add_argument("--tcp-host", default="0.0.0.0", help="TCP bind address (default: 0.0.0.0)")
@@ -249,10 +254,11 @@ def main():
         set_config(load_config(args.config))
 
     if args.blah2_config:
-        fc = load_blah2_config(args.blah2_config)
-        if fc is not None:
-            config = get_config()
-            config["radar"]["center_frequency"] = fc
+        capture = load_blah2_config(args.blah2_config)
+        config = get_config()
+        for key, setting in (("fc", "center_frequency"), ("fs", "sample_rate"), ("cpi", "cpi")):
+            if key in capture:
+                config["radar"][setting] = capture[key]
 
     event_writer = None
     if args.stream_output:

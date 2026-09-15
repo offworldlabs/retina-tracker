@@ -85,6 +85,7 @@ class TrackEventWriter:
         max_velocity_ms=0.0,
         anomaly_types=None,
         shadow_fraction=0.0,
+        interference_fraction=0.0,
     ):
         # Only what is new. The event is still written when nothing is —
         # length, the anomaly flags and shadow_fraction all move over a
@@ -103,6 +104,11 @@ class TrackEventWriter:
             "max_velocity_ms": max_velocity_ms,
             "anomaly_types": sorted(anomaly_types) if anomaly_types else [],
             "shadow_fraction": shadow_fraction,
+            # What the occupancy map thought of this track's detections, which
+            # is how it is held to account: a track carrying an adsb_hex is an
+            # aircraft whatever the map says, so this reading above zero on one
+            # is the map reaching for something it must not have.
+            "interference_fraction": interference_fraction,
         }
         self._write_line(json.dumps(event) + "\n")
 

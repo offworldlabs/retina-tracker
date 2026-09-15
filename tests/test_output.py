@@ -45,6 +45,7 @@ def event_size():
                 "max_velocity_ms": 0.0,
                 "anomaly_types": [],
                 "shadow_fraction": 0.0,
+                "interference_fraction": 0.0,
             }
         )
         + "\n"
