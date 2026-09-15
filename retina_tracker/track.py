@@ -679,12 +679,19 @@ class Track:
         )
 
     @classmethod
-    def _generate_id(cls, timestamp_ms, adsb_hex=None):
+    def _generate_id(cls, timestamp_ms):
+        """A fresh identity per track, never one derived from the aircraft.
+
+        An id built from adsb_hex gives every pass of an aircraft the same
+        identity, which costs twice over: fragmentation becomes unmeasurable,
+        because live_score counts distinct ids per hex and would only ever
+        find one, and two tracks of the same aircraft share OutputWriter's
+        per-track high-water mark, so whichever emits first silently suppresses
+        the other's earlier detections. The label already travels in the
+        event's own adsb_hex field, so nothing downstream needs it here.
+        """
         dt = datetime.fromtimestamp(timestamp_ms / 1000.0)
         date_str = dt.strftime("%y%m%d")
-
-        if adsb_hex:
-            return f"{date_str}-{adsb_hex.upper()}"
 
         if cls._last_date != date_str:
             cls._daily_counter = 0
