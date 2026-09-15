@@ -120,6 +120,7 @@ class Track:
         self.last_dt = None
         self.last_residual = None
         self.last_q_scale = 1.0
+        self.last_n_missed = 0
         self.n_shadowed = 1 if detection.get("shadowed") else 0
 
         self.total_snr = detection["snr"]
@@ -733,6 +734,11 @@ class Track:
         self.nis_ema = (1.0 - memory) * self.nis_ema + memory * residual.nis
         self.last_residual = residual
         self.last_q_scale = q_scale
+        # Before the reset below, which is what makes this worth latching: how
+        # long the track had been coasting is a property of the prediction this
+        # innovation was measured against, and by the end of this method it is
+        # gone.
+        self.last_n_missed = self.n_missed
 
         # Identity swap check MUST run before adsb_hex capture
         self._check_identity_change_anomaly(detection, timestamp)

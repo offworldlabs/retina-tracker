@@ -166,7 +166,7 @@ class InnovationWriter(TrackEventWriter):
             # events file, which a track that never confirmed is absent from.
             "delay": detection.get("delay"),
             "doppler": detection.get("doppler"),
-            "n_missed": track.n_missed,
+            "n_missed": track.last_n_missed,
             "q_scale": track.last_q_scale,
             "innovation": [float(x) for x in residual.innovation],
             "s_diag": [float(residual.S[0][0]), float(residual.S[1][1])],

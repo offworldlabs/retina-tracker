@@ -145,6 +145,33 @@ class TestRecordsReachTheFile:
         assert all(r["q_scale"] >= 1.0 for r in read(path))
 
 
+class TestTheCoastingHistoryIsNotLost:
+    """How long a track had been coasting is the one input to the prediction
+    that a replay cannot reconstruct, and it is the reason these records exist
+    rather than an offline reconstruction. Track.update() zeroes n_missed
+    before returning, so reading it from the track afterwards gives 0 every
+    time and the longest predictions - the ones Q answers to - look like the
+    shortest."""
+
+    def _coasted(self, tmp_path, gap):
+        path = tmp_path / "innovations.jsonl"
+        writer = InnovationWriter(str(path), max_bytes=0)
+        tracker = Tracker(innovation_writer=writer)
+
+        run(tracker, n=6)
+        for i in range(gap):
+            tracker.process_frame([], BASE_TS + (6 + i) * 500)
+        tracker.process_frame(frame(20.0 - (6 + gap) * 0.05), BASE_TS + (6 + gap) * 500)
+        writer.close()
+        return read(path)
+
+    def test_a_reassociation_records_the_frames_it_coasted(self, tmp_path):
+        assert self._coasted(tmp_path, gap=2)[-1]["n_missed"] == 2
+
+    def test_an_uninterrupted_update_still_records_none(self, tmp_path):
+        assert self._coasted(tmp_path, gap=0)[-1]["n_missed"] == 0
+
+
 class TestOffByDefault:
     def test_no_writer_means_no_records_and_no_cost(self, tmp_path):
         tracker = Tracker()
