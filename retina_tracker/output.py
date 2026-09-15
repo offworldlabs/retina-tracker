@@ -172,6 +172,11 @@ class InnovationWriter(TrackEventWriter):
             # events file, which a track that never confirmed is absent from.
             "delay": detection.get("delay"),
             "doppler": detection.get("doppler"),
+            # The occupancy map's verdict on that measurement, so calibration
+            # can drop the interference exactly rather than inferring it from a
+            # track's Doppler holding still. Present whether or not the node is
+            # suppressing on it.
+            "interfering": bool(detection.get("interfering")),
             "n_missed": track.last_n_missed,
             "q_scale": track.last_q_scale,
             "innovation": [float(x) for x in residual.innovation],
