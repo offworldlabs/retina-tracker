@@ -200,7 +200,12 @@ def main():
         help="Number of detections to include in sliding window (default: 20)",
     )
     parser.add_argument("-c", "--config", type=str, help="Path to configuration file (default: config.yaml)")
-    parser.add_argument("--blah2-config", type=str, help="Path to blah2 config.yml to read center frequency (fc)")
+    parser.add_argument(
+        "--blah2-config",
+        type=str,
+        help="Path to blah2 config.yml to read the capture parameters the tracker derives from: "
+        "fc for the wavelength, and fs and cpi for the resolution cell.",
+    )
 
     parser.add_argument("--tcp", action="store_true", help="Run as TCP server for streaming input from blah2")
     parser.add_argument("--tcp-host", default="0.0.0.0", help="TCP bind address (default: 0.0.0.0)")

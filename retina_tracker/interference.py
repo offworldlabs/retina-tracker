@@ -163,7 +163,10 @@ class DopplerOccupancy:
         return self._frames_occupied.get(bin_index, 0) / len(self._frames)
 
     def is_interfering(self, doppler):
-        if doppler is None or not isinstance(doppler, (int, float)) or not math.isfinite(doppler):
+        try:
+            if doppler is None or not math.isfinite(doppler):
+                return False
+        except TypeError:
             return False
         return self._bin(doppler) in self._interfering
 

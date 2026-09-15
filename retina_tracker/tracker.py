@@ -335,6 +335,12 @@ class Tracker:
             if resync:
                 self.n_clock_resyncs += 1
                 self.n_backwards = 0
+                # The window now straddles two time bases, and the drift the
+                # occupancy map takes out of each bin is a rate times an
+                # elapsed time. Across a clock jump that elapsed time is
+                # fiction, so every bin's scatter reads inflated and a clean
+                # one could be convicted. Start the window again.
+                self.occupancy.clear()
             self.last_timestamp = timestamp
 
     def _classify_frame(self, timestamp, landed_in, detections, below_snr, suppressed):

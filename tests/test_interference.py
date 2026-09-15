@@ -35,7 +35,7 @@ from retina_tracker.config import (
 from retina_tracker.interference import DopplerOccupancy
 from retina_tracker.kalman import doppler_to_range_rate
 from retina_tracker.track import Track
-from retina_tracker.tracker import Tracker
+from retina_tracker.tracker import BACKWARDS_RUN_BEFORE_RESYNC, Tracker
 
 FRAME_MS = 500
 WINDOW_S = 5.0
@@ -267,6 +267,23 @@ class TestWhenItIsAllowedToJudge:
         rng = random.Random(10)
         occupancy = feed(make_map(), [tone_frame(27.9, rng) for _ in range(WINDOW_FRAMES * 3)])
         assert len(occupancy._frames) == WINDOW_FRAMES
+
+    def test_a_clock_resync_starts_the_window_again(self):
+        """The window would otherwise straddle two time bases, and the drift
+        the map removes is a rate times an elapsed time that no longer means
+        anything across the jump."""
+        set_config(build_config())
+        tracker = Tracker(config=None)
+        rng = random.Random(14)
+        for i in range(WINDOW_FRAMES * 2):
+            tracker.process_frame(tone_frame(27.9, rng), i * FRAME_MS)
+        assert tracker.occupancy.interfering_bins()
+
+        for i in range(BACKWARDS_RUN_BEFORE_RESYNC):
+            tracker.process_frame(tone_frame(27.9, rng), i * FRAME_MS)
+
+        assert tracker.n_clock_resyncs == 1
+        assert tracker.occupancy.interfering_bins() == frozenset()
 
     def test_a_malformed_detection_is_skipped_rather_than_raising(self):
         occupancy = make_map()
