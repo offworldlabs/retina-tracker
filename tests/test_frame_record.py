@@ -215,10 +215,34 @@ def served():
         server.server_close()
 
 
-def test_nothing_is_held_before_the_first_frame(served):
-    _tracker, base = served
-    assert request(base + "/frame") == (404, {"error": "frame not held"})
-    assert request(base + f"/frame?timestamp={ts(0)}") == (404, {"error": "frame not held"})
+def not_held(tracker, latest):
+    return 404, {"error": "frame not held", "run": tracker.run_id, "latest": latest}
+
+
+def test_a_tracker_never_fed_says_nothing_is_held(served):
+    """latest null: nothing will arrive, so a caller should not wait."""
+    tracker, base = served
+    assert request(base + "/frame") == not_held(tracker, None)
+    assert request(base + f"/frame?timestamp={ts(0)}") == not_held(tracker, None)
+
+
+def test_a_frame_not_yet_processed_names_an_older_latest(served):
+    """latest older than asked: probably in flight, worth a short retry."""
+    tracker, base = served
+    confirmed(tracker)
+    assert request(base + f"/frame?timestamp={ts(5)}") == not_held(tracker, ts(4))
+    process_streaming_frame(tracker, empty_frame(5))
+    status, body = request(base + f"/frame?timestamp={ts(5)}")
+    assert (status, body["timestamp"]) == (200, ts(5))
+
+
+def test_an_evicted_frame_names_a_newer_latest(served):
+    """latest newer than asked: aged out, so give up now."""
+    tracker, base = served
+    last = MAX_FRAME_RECORDS + 4
+    for i in range(last + 1):
+        process_streaming_frame(tracker, empty_frame(i))
+    assert request(base + f"/frame?timestamp={ts(0)}") == not_held(tracker, ts(last))
 
 
 def test_a_frame_is_served_by_its_timestamp(served):
@@ -262,7 +286,7 @@ def test_no_timestamp_serves_the_latest_frame(served):
 def test_an_unheld_timestamp_is_404(served):
     tracker, base = served
     confirmed(tracker)
-    assert request(base + f"/frame?timestamp={ts(99)}") == (404, {"error": "frame not held"})
+    assert request(base + f"/frame?timestamp={ts(99)}") == not_held(tracker, ts(4))
 
 
 @pytest.mark.parametrize("raw", ["abc", "1.5", ""])
@@ -278,7 +302,7 @@ def test_a_reset_clears_the_frames_but_keeps_the_run(served):
 
     request(base + "/reset", method="POST")
 
-    assert request(base + "/frame") == (404, {"error": "frame not held"})
-    assert request(base + f"/frame?timestamp={ts(4)}") == (404, {"error": "frame not held"})
+    assert request(base + "/frame") == not_held(tracker, None)
+    assert request(base + f"/frame?timestamp={ts(4)}") == not_held(tracker, None)
     _status, after = request(base + "/health")
     assert before["run"] == after["run"] == tracker.run_id

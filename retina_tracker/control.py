@@ -26,7 +26,9 @@ Routes:
     GET  /frame           the latest frame's confirmed tracks
     GET  /frame?timestamp=<ms>
                           the same for the frame with exactly that timestamp,
-                          while it is still held
+                          while it is still held. A 404 names the run and
+                          the newest held timestamp (null if none), so a
+                          caller can tell "not yet" from "gone" from "not fed"
     GET  /events          server-sent events from the detection history
     POST /reset           clear the tracker, between search geometries
     POST /history/clear   clear the history, keep tracking
@@ -142,8 +144,13 @@ class _Handler(BaseHTTPRequestHandler):
         Keyed on the timestamp because that is what the consumer holds: it
         read the frame from blah2-api, which forwards the same frame here, so
         the timestamp is the one identifier both sides already share. A 404
-        is an ordinary answer rather than a fault. The frame may not have
-        arrived yet, may have aged out, or a reset may have cleared it.
+        is an ordinary answer rather than a fault, and it carries what the
+        consumer needs to tell the cases apart. `latest` older than the frame
+        asked for means it has probably not been processed yet, and a short
+        wait is worth it; newer means it has aged out and never will be; null
+        means nothing is held at all (never fed, or just reset), so waiting is
+        pointless. The run id comes too, because a consumer reporting that the
+        tracker produced nothing for a frame still has to say which run.
         """
         raw = parse_qs(urlparse(self.path).query, keep_blank_values=True).get("timestamp", [None])[0]
         timestamp = None
@@ -154,9 +161,17 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(400, {"error": "bad timestamp"})
                 return
         with self.server.tracker_lock:
-            record = self.server.tracker.frame_record(timestamp)
+            tracker = self.server.tracker
+            record = tracker.frame_record(timestamp)
+            if record is None:
+                latest = tracker.frame_record()
+                missing = {
+                    "error": "frame not held",
+                    "run": tracker.run_id,
+                    "latest": None if latest is None else latest["timestamp"],
+                }
         if record is None:
-            self._send(404, {"error": "frame not held"})
+            self._send(404, missing)
             return
         self._send(200, record)
 
