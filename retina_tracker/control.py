@@ -13,6 +13,24 @@ So control moves to its own door. Nothing here is specific to a caller: the
 auto-calibration search and the Tracker page are equal consumers of a tracker
 that does not know which is which.
 
+It also answers one question nothing else can: what a given frame did to the
+confirmed tracks. events.jsonl is written per association, so a coasting track
+emits nothing there and a deletion is silent. A consumer that has to say, for
+a frame it holds, which confirmed tracks are alive and which detection each
+took (retina-telemetry, sending tracks with every detection frame) has had no
+source for that. GET /frame is it.
+
+Routes:
+
+    GET  /health          frame and track counts, and the run id
+    GET  /frame           the latest frame's confirmed tracks
+    GET  /frame?timestamp=<ms>
+                          the same for the frame with exactly that timestamp,
+                          while it is still held
+    GET  /events          server-sent events from the detection history
+    POST /reset           clear the tracker, between search geometries
+    POST /history/clear   clear the history, keep tracking
+
 Bound to loopback by default for the same reason the ingest socket is (see the
 sidecar's compose command): the container runs with network_mode host, so
 0.0.0.0 would publish this on the LAN.
@@ -102,15 +120,45 @@ class _Handler(BaseHTTPRequestHandler):
                     # that does not match what blah2 is actually producing is
                     # visible here rather than only as a quiet sky.
                     "detections_rejected": self.server.tracker.n_detections_rejected,
+                    # Which namespace the track ids belong to. They repeat
+                    # after a same-day restart, and this does not.
+                    "run": self.server.tracker.run_id,
                 }
             if self.server.history is not None:
                 payload["history"] = self.server.history.stats()
             self._send(200, payload)
             return
+        if route == "/frame":
+            self._frame()
+            return
         if route == "/events":
             self._stream()
             return
         self._send(404, {"error": "not found"})
+
+    def _frame(self):
+        """One frame's confirmed tracks, looked up by the frame's timestamp.
+
+        Keyed on the timestamp because that is what the consumer holds: it
+        read the frame from blah2-api, which forwards the same frame here, so
+        the timestamp is the one identifier both sides already share. A 404
+        is an ordinary answer rather than a fault. The frame may not have
+        arrived yet, may have aged out, or a reset may have cleared it.
+        """
+        raw = parse_qs(urlparse(self.path).query, keep_blank_values=True).get("timestamp", [None])[0]
+        timestamp = None
+        if raw is not None:
+            try:
+                timestamp = int(raw)
+            except ValueError:
+                self._send(400, {"error": "bad timestamp"})
+                return
+        with self.server.tracker_lock:
+            record = self.server.tracker.frame_record(timestamp)
+        if record is None:
+            self._send(404, {"error": "frame not held"})
+            return
+        self._send(200, record)
 
     # ── The data stream ────────────────────────────────────────
 

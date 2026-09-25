@@ -29,10 +29,15 @@ def process_streaming_frame(tracker, frame):
 
     detections = []
     for idx, (delay, doppler, snr) in enumerate(zip(delays, dopplers, snrs)):
+        # frame_index is where this detection sat in the arrays as sent, so
+        # GET /frame can name it in terms a holder of the same frame can
+        # resolve. The tracker drops and partitions detections before
+        # association, so its own indices mean nothing outside it.
         detection = {
             "delay": delay,
             "doppler": doppler,
             "snr": snr,
+            "frame_index": idx,
         }
         if adsb_list and idx < len(adsb_list) and adsb_list[idx] is not None:
             detection["adsb"] = adsb_list[idx]
