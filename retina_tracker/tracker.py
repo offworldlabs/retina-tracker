@@ -2,7 +2,9 @@
 
 import math
 import numbers
-from collections import deque
+import secrets
+from collections import OrderedDict, deque
+from datetime import datetime, timezone
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -47,6 +49,24 @@ BACKWARDS_RUN_BEFORE_RESYNC = 3
 # promotion, which would otherwise hold up the whole queue behind it.
 MAX_PENDING_CLASSIFICATION_FRAMES = 60
 
+# How many frames' results are held for GET /frame. A consumer asks about the
+# frame it has just read from blah2-api, which is at most a few frames behind
+# the one being processed, so this is slack for a slow poll rather than a
+# history: 32 frames is tens of seconds at any node's frame rate.
+MAX_FRAME_RECORDS = 32
+
+
+def _new_run_id():
+    """Names this process's track-id namespace.
+
+    Track ids come from a daily counter that lives in the process, so a
+    same-day restart hands out the ids it handed out before. Anything that
+    keys on a track id across a restart needs to be told the namespace
+    changed, and this is how. A start time alone would collide for two
+    starts in one second, which a crash loop makes plausible.
+    """
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(3)
+
 
 class Tracker:
     """Multi-target tracker using Kalman filtering and GNN data association."""
@@ -84,6 +104,8 @@ class Tracker:
         # --blah2-config has been read. Whether it is consulted at all is read
         # per frame, as the shadow thresholds are.
         self.occupancy = DopplerOccupancy.from_config()
+        self.run_id = _new_run_id()
+        self.frame_records = OrderedDict()
 
     def reset(self):
         """Clear in-progress and completed-track state in place, as if
@@ -95,6 +117,9 @@ class Tracker:
         tracks are no longer meaningful) — mirrors blah2's own
         Tracker::reset() on an fc change. KalmanFilter holds no per-geometry
         state, so it doesn't need recreating.
+
+        The run id survives, because the track-id counter does: ids do not
+        repeat across a reset, so the namespace has not changed.
         """
         self.tracks = []
         self.all_tracks = []
@@ -102,6 +127,7 @@ class Tracker:
         self.last_timestamp = None
         self._pending_classification.clear()
         self.occupancy.clear()
+        self.frame_records.clear()
         self._reset_counters()
 
     def _reset_counters(self):
@@ -263,6 +289,12 @@ class Tracker:
         # one associates it, or it starts a tentative one below. The question
         # a consumer actually has is whether that track was ever confirmed.
         landed_in = {} if self.detection_sink is not None else None
+        # Track -> the detection it took this frame, for the frame record.
+        # Whether a track associated is decided here rather than read off its
+        # state afterwards: a track promoted this frame reads ACTIVE whether
+        # or not it associated, and the record must never call a track active
+        # without the detection that made it so.
+        took = {}
 
         _lazy_write = hasattr(self.event_writer, "write_event_lazy") if self.event_writer else False
 
@@ -276,6 +308,7 @@ class Tracker:
                 track.state_status = TrackState.ACTIVE
             associated_tracks.add(track_idx)
             associated_detections.add(det_idx)
+            took[track] = det
             if landed_in is not None:
                 landed_in[det_idx] = track
 
@@ -368,12 +401,16 @@ class Tracker:
                     continue
                 new_track = Track(det, timestamp, self.kf, frame=self.frame_count, config=self.config)
                 self.tracks.append(new_track)
+                took[new_track] = det
                 if landed_in is not None:
                     landed_in[i] = new_track
 
         self._initiate_tracklets(timestamp)
 
         deleted_tracks = [t for t in self.tracks if t.should_delete()]
+        # Before the merge below, which can fold a later track into one that
+        # died this frame and would report the sum as the track that died.
+        deleted = [_frame_track(t, "deleted", None) for t in deleted_tracks if t.id]
         for track in deleted_tracks:
             # Latched here rather than inferred from absence later: this is
             # what makes "never confirmed" a settled answer instead of a
@@ -416,6 +453,39 @@ class Tracker:
                 # one could be convicted. Start the window again.
                 self.occupancy.clear()
             self.last_timestamp = timestamp
+
+        self._record_frame(timestamp, took, deleted)
+
+    def _record_frame(self, timestamp, took, deleted):
+        """Hold what this frame did to every confirmed track, for GET /frame.
+
+        events.jsonl cannot answer that: a coasting track writes nothing and a
+        deletion is silent there. A consumer that has to say which confirmed
+        tracks are alive after a given frame, and which detection each took,
+        reads it from here.
+        """
+        tracks = []
+        for track in self.tracks:
+            if not track.id:
+                continue
+            det = took.get(track)
+            if det is None:
+                tracks.append(_frame_track(track, "coasting", None))
+            else:
+                tracks.append(_frame_track(track, "active", det.get("frame_index")))
+        tracks.extend(deleted)
+
+        self.frame_records.pop(timestamp, None)
+        self.frame_records[timestamp] = {"run": self.run_id, "timestamp": timestamp, "tracks": tracks}
+        while len(self.frame_records) > MAX_FRAME_RECORDS:
+            self.frame_records.popitem(last=False)
+
+    def frame_record(self, timestamp=None):
+        """The record for the frame at `timestamp`, the latest if None, or
+        None if it is not held."""
+        if timestamp is None:
+            return next(reversed(self.frame_records.values()), None)
+        return self.frame_records.get(timestamp)
 
     def _classify_frame(self, timestamp, landed_in, detections, below_snr, suppressed):
         """Queue one frame's detections for classification, then drain.
@@ -697,3 +767,29 @@ class Tracker:
             "n_tracks": len(all_confirmed),
             "n_active": len(self.get_active_tracks()),
         }
+
+
+def _frame_track(track, state, hit):
+    """One confirmed track as GET /frame reports it, in the tracker's units.
+
+    `hit` indexes the frame's arrays as they arrived over the socket, before
+    any detection was rejected or partitioned out, which is the only indexing
+    a consumer holding the same frame can resolve. None where the detection
+    was never stamped with one, as in file mode.
+    """
+    avg_snr = track.total_snr / max(track.n_associated, 1)
+    return {
+        "id": track.id,
+        "state": state,
+        "hit": hit,
+        "n_associated": track.n_associated,
+        "n_missed": track.n_missed,
+        "adsb_hex": track.adsb_hex,
+        "is_anomalous": track.is_anomalous,
+        "anomaly_types": sorted(track.anomaly_types),
+        "max_velocity_ms": float(track.max_velocity_ms),
+        "born_timestamp": track.birth_timestamp,
+        "avg_snr": float(avg_snr) if math.isfinite(avg_snr) else None,
+        "shadow_fraction": track.shadow_fraction(),
+        "interference_fraction": track.interference_fraction(),
+    }
