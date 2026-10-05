@@ -102,6 +102,21 @@ class TestKinematicConsistency:
         tracks = self._tracks([("t1", rows, None)])
         assert kinematic_consistency(tracks, LAM_KM)["impossible"] == 1
 
+    def test_a_track_crossing_zero_doppler_is_judged_on_each_side(self):
+        rows, delay = [], 10.0
+        for i in range(16):
+            doppler = 60.0 - 8.0 * i
+            rows.append(detection(i * 1000, round(delay, 4), doppler))
+            delay += -LAM_KM * (doppler - 4.0)
+        tracks = self._tracks([("t1", rows, None)])
+        assert kinematic_consistency(tracks, LAM_KM)["impossible"] == 0
+
+    def test_one_impossible_side_of_a_crossing_makes_the_track_impossible(self):
+        rows = [detection(i * 1000, 10.0 - LAM_KM * 60.0 * i, 60.0) for i in range(8)]
+        rows += [detection((8 + i) * 1000, 9.0, -60.0) for i in range(8)]
+        tracks = self._tracks([("t1", rows, None)])
+        assert kinematic_consistency(tracks, LAM_KM)["impossible"] == 1
+
     def test_a_track_too_short_to_judge_is_not_counted(self):
         rows = [detection(i * 1000, 9.0, -60.0) for i in range(3)]
         tracks = self._tracks([("t1", rows, None)])

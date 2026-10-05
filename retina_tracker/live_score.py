@@ -112,29 +112,50 @@ def _measurable(track):
     return times
 
 
+def _same_sign_runs(rows):
+    """Split a track where its Doppler changes sign.
+
+    A zero-Doppler crossing is a range extremum, so a single slope fitted
+    across one says nothing about the Doppler on either side of it.
+    """
+    runs = []
+    for row in rows:
+        if runs and (row["doppler"] > 0) == (runs[-1][-1]["doppler"] > 0):
+            runs[-1].append(row)
+        else:
+            runs.append([row])
+    return runs
+
+
 def kinematic_consistency(tracks, lam_km):
     """How many tracks move the way their own Doppler says they must.
 
     Doppler is the bistatic range rate, so a track's delay must advance by
     -wavelength * doppler. Nothing enforces that if the filter treats the two
     axes as independent, and roughly half the tracks of such a build do not.
+    Judged on each side of a zero-Doppler crossing separately; a track is
+    impossible if either side is.
     """
     consistent = impossible = 0
     worst = []
     for track_id, track in tracks.items():
-        times = _measurable(track)
-        if times is None:
+        verdicts = []
+        for rows in _same_sign_runs(track["detections"]):
+            times = _measurable({"detections": rows})
+            if times is None:
+                continue
+            observed = _slope(times, [r["delay"] for r in rows])
+            if observed is None:
+                continue
+            implied = -lam_km * (sum(r["doppler"] for r in rows) / len(rows))
+            verdicts.append(bool(implied) and observed / implied >= CONSISTENCY_RATIO)
+            worst.append((abs(observed - implied), track_id, observed, implied))
+        if not verdicts:
             continue
-        rows = track["detections"]
-        observed = _slope(times, [r["delay"] for r in rows])
-        if observed is None:
-            continue
-        implied = -lam_km * (sum(r["doppler"] for r in rows) / len(rows))
-        if implied and observed / implied >= CONSISTENCY_RATIO:
+        if all(verdicts):
             consistent += 1
         else:
             impossible += 1
-        worst.append((abs(observed - implied), track_id, observed, implied))
     total = consistent + impossible
     worst.sort(reverse=True)
     return {
