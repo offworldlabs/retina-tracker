@@ -6,7 +6,7 @@ Multi-target tracker for bistatic passive radar detection data from [blah2](http
 
 This tracker processes delay-Doppler detections to create continuous tracks of targets (typically commercial aircraft) in high-clutter environments. It uses:
 
-- **Kalman filtering** with constant-velocity motion model in delay-Doppler space
+- **Kalman filtering** with a constant-acceleration model on bistatic range, measurement noise sized from the node's resolution cell (docs/measurement-noise.md)
 - **Global Nearest Neighbor (GNN)** data association with Hungarian algorithm
 - **M-of-N confirmation** logic for track promotion
 - **Tracklet-based initiation** for robust track creation
@@ -61,8 +61,8 @@ tracker:
   detection_window: 20    # Rolling detection window size
 
 process_noise:
-  delay: 0.1
-  doppler: 0.5
+  range_jerk: 1.0e-7      # Bistatic range jerk PSD floor (km^2/s^5)
+  range_rate: 1.0e-5      # Range-rate random walk PSD (km^2/s^3)
 
 output:
   max_bytes: 67108864     # Rotate the -s events file at this size (64 MiB, 0 disables)

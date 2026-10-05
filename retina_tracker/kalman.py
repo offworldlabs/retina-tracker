@@ -6,9 +6,10 @@ from typing import NamedTuple
 import numpy as np
 
 from .config import (
-    MEASUREMENT_NOISE_DELAY,
-    MEASUREMENT_NOISE_DOPPLER,
+    MEASUREMENT_NOISE_DELAY_KM2,
+    MEASUREMENT_NOISE_DOPPLER_HZ2,
     PROCESS_NOISE_JERK,
+    PROCESS_NOISE_RANGE_RATE,
     WAVELENGTH_KM,
 )
 
@@ -79,7 +80,7 @@ class KalmanFilter:
     @property
     def R(self):
         wavelength = WAVELENGTH_KM()
-        return np.diag([MEASUREMENT_NOISE_DELAY, wavelength * wavelength * MEASUREMENT_NOISE_DOPPLER])
+        return np.diag([MEASUREMENT_NOISE_DELAY_KM2(), wavelength * wavelength * MEASUREMENT_NOISE_DOPPLER_HZ2()])
 
     def predict(self, state, covariance, q_scale=1.0):
         """Advance one frame.
@@ -114,6 +115,13 @@ class KalmanFilter:
         Q[1, 1] = jerk * dt3 / 3.0
         Q[1, 2] = Q[2, 1] = jerk * dt2 / 2.0
         Q[2, 2] = jerk * dt
+        # A range-rate random walk on top of the jerk: model error that grows
+        # with the prediction interval far faster than white jerk allows for.
+        rate = PROCESS_NOISE_RANGE_RATE()
+        Q[0, 0] += rate * dt3 / 3.0
+        Q[0, 1] += rate * dt2 / 2.0
+        Q[1, 0] = Q[0, 1]
+        Q[1, 1] += rate * dt
 
         state_pred = F @ state
         cov_pred = F @ covariance @ F.T + Q

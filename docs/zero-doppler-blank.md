@@ -184,6 +184,10 @@ widening is one Doppler bin from its own CPI, the gate reach uses the existing
 at two geometries 5x apart in median range and at two measurement noise levels,
 and kept only where it helped both.
 
+`R` has since been sized from the resolution cell (docs/measurement-noise.md),
+which cost one real crossing on jn1: a track formed later under the tighter gate,
+and the observation limit would not hold it across the gap.
+
 The harness is fitted to one site (Atlanta) and its noise to that site's ADS-B
 residuals, which overstate radar noise about 9x. The trends above are evidence;
 the absolute numbers are not a prediction for any node.

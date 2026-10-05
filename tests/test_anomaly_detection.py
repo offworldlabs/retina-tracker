@@ -8,12 +8,18 @@ import os
 import sys
 
 from retina_tracker.track_detections import (
+    SPEED_OF_LIGHT,
     MACH_1_MS,
     MAX_DIRECTION_CHANGE_DEG_PER_SEC,
     MAX_NORMAL_ACCEL_MS2,
     process_detections,
     set_config,
 )
+
+
+def follow(delay0, doppler, t_s, fc=200000000):
+    """Delay where the target's own Doppler puts it t_s seconds on."""
+    return delay0 - SPEED_OF_LIGHT / fc / 1000.0 * doppler * t_s
 
 
 def create_normal_aircraft_data():
@@ -24,7 +30,7 @@ def create_normal_aircraft_data():
         detections.append(
             {
                 "timestamp": 1700000000000 + i * 500,
-                "delay": [50.0 + i * 0.5],
+                "delay": [follow(50.0, 100.0 - i * 2, i * 0.5)],
                 "doppler": [100.0 - i * 2],
                 "snr": [15.0],
                 "adsb": [
@@ -62,7 +68,7 @@ def create_anomalous_aircraft_data():
         detections.append(
             {
                 "timestamp": 1700000000000 + i * 500,
-                "delay": [75.0 + i * 2.0],  # Faster movement
+                "delay": [follow(75.0, mach5_doppler - i * 10, i * 0.5)],
                 "doppler": [mach5_doppler - i * 10],  # Supersonic Doppler shift
                 "snr": [18.0],
                 # No ADS-B data - this is an unidentified supersonic object (anomalous)
@@ -89,7 +95,7 @@ def create_mixed_aircraft_data():
     for i in range(6):
         frame_data = {
             "timestamp": 1700000000000 + i * 500,
-            "delay": [50.0 + i * 0.5, 75.0 + i * 2.0],
+            "delay": [follow(50.0, 100.0 - i * 2, i * 0.5), follow(75.0, mach5_doppler - i * 10, i * 0.5)],
             "doppler": [100.0 - i * 2, mach5_doppler - i * 10],  # Normal, then supersonic
             "snr": [15.0, 18.0],
             "adsb": [
@@ -278,7 +284,7 @@ def test_anomaly_threshold():
         detections.append(
             {
                 "timestamp": 1700000000000 + i * 500,
-                "delay": [50.0 + i * 0.5],
+                "delay": [follow(50.0, below_mach1_doppler - i * 2, i * 0.5)],
                 "doppler": [below_mach1_doppler - i * 2],  # Subsonic Doppler
                 "snr": [15.0],
                 # No ADS-B - but Doppler is subsonic so not anomalous
@@ -314,7 +320,7 @@ def test_anomaly_threshold():
         detections.append(
             {
                 "timestamp": 1700000000000 + i * 500,
-                "delay": [75.0 + i * 1.0],
+                "delay": [follow(75.0, above_mach1_doppler - i * 5, i * 0.5)],
                 "doppler": [above_mach1_doppler - i * 5],  # Supersonic Doppler
                 "snr": [16.0],
                 # No ADS-B - supersonic Doppler without confirmation = anomalous
@@ -355,7 +361,7 @@ def test_acceleration_anomaly():
         detections.append(
             {
                 "timestamp": 1700000000000 + i * 1000,  # 1 second intervals
-                "delay": [50.0 + i * 0.5],
+                "delay": [follow(50.0, 100.0 - i * 2, i * 1.0)],
                 "doppler": [100.0 - i * 2],
                 "snr": [15.0],
                 "adsb": [
@@ -430,7 +436,7 @@ def test_direction_change_anomaly():
         detections.append(
             {
                 "timestamp": 1700000000000 + i * 1000,  # 1 second intervals
-                "delay": [50.0 + i * 0.5],
+                "delay": [follow(50.0, 100.0 - i * 2, i * 1.0)],
                 "doppler": [100.0 - i * 2],
                 "snr": [15.0],
                 "adsb": [
@@ -512,7 +518,7 @@ def test_position_mismatch_no_false_positive_on_slow_aircraft():
         detections.append(
             {
                 "timestamp": 1700000000000 + i * 1000,  # 1 Hz frames
-                "delay": [50.0 + i * 0.2],
+                "delay": [follow(50.0, 80.0 + i * 0.5, i * 1.0)],
                 "doppler": [80.0 + i * 0.5],
                 "snr": [15.0],
                 "adsb": [
@@ -570,7 +576,7 @@ def test_position_mismatch_true_positive_on_frozen_adsb():
         detections.append(
             {
                 "timestamp": 1700000000000 + i * 1000,
-                "delay": [50.0 + i * 0.2],
+                "delay": [follow(50.0, 80.0 + i * 0.5, i * 1.0)],
                 "doppler": [80.0 + i * 0.5],
                 "snr": [15.0],
                 "adsb": [

@@ -18,7 +18,7 @@ from retina_tracker.tracker import Tracker
 BASE_TS = 1718747745000
 
 
-def frame(delay, doppler=-120.0, snr=16.0):
+def frame(delay, doppler=66.7, snr=16.0):
     return [{"delay": delay, "doppler": doppler, "snr": snr}]
 
 

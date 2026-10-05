@@ -87,7 +87,13 @@ def load_config(config_path=None):
             "gate_threshold": 9.0,
             "detection_window": 20,
         },
-        "process_noise": {"range_jerk": 1e-7, "adaptive": True, "max_scale": 25.0, "nis_memory": 0.25},
+        "process_noise": {
+            "range_jerk": 1e-7,
+            "range_rate": 1e-5,
+            "adaptive": True,
+            "max_scale": 25.0,
+            "nis_memory": 0.25,
+        },
         "tracklet": {"max_delay_residual": 2.0, "max_doppler_residual": 10.0, "max_time_span": 3.0},
         "shadow": {"enabled": True, "delay_km": 3.0, "snr_margin_db": 3.0, "min_fraction": 0.5},
         "interference": {
@@ -207,9 +213,19 @@ def OUTPUT_BACKUP_COUNT():
     return _get_param("output", "backup_count", 1)
 
 
-MEASUREMENT_NOISE_DELAY = 1.0
-MEASUREMENT_NOISE_DOPPLER = 5.0
+# Measurement noise, in resolution cells, at the 10 dB reference SNR. One cell
+# is conservative: innovations measured at two nodes put the real scatter well
+# under it, but not at one value both agree on. See docs/measurement-noise.md.
+MEASUREMENT_NOISE_CELLS = 1.0
 INITIAL_RANGE_ACCEL_VARIANCE = 1e-4
+
+
+def MEASUREMENT_NOISE_DELAY_KM2():
+    return (MEASUREMENT_NOISE_CELLS * DELAY_CELL_KM()) ** 2
+
+
+def MEASUREMENT_NOISE_DOPPLER_HZ2():
+    return (MEASUREMENT_NOISE_CELLS * DOPPLER_BIN_HZ()) ** 2
 
 
 def CENTER_FREQUENCY_HZ():
@@ -325,6 +341,10 @@ def INTERFERENCE_MIN_SAMPLES():
 
 def PROCESS_NOISE_JERK():
     return _get_param("process_noise", "range_jerk", 1e-7)
+
+
+def PROCESS_NOISE_RANGE_RATE():
+    return _get_param("process_noise", "range_rate", 1e-5)
 
 
 def PROCESS_NOISE_ADAPTIVE():

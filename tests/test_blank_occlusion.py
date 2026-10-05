@@ -81,8 +81,9 @@ def test_blanked_misses_do_not_count_towards_deletion():
 
 
 def confirmed_track(tracker, doppler, frames=8):
+    step = doppler_to_range_rate(doppler) * FRAME_MS / 1000.0
     for frame in range(frames):
-        tracker.process_frame([{"delay": 20.0, "doppler": doppler, "snr": 20.0}], frame * FRAME_MS)
+        tracker.process_frame([{"delay": 20.0 + frame * step, "doppler": doppler, "snr": 20.0}], frame * FRAME_MS)
     track = tracker.tracks[0]
     assert track.state_status == TrackState.ACTIVE
     return track, frames

@@ -930,15 +930,6 @@ class TestIntegrationSyntheticAnomalies:
         assert len(confirmed) >= 1, "Should maintain track despite missed detections"
         print("PASSED: Track maintained through missed detections")
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Fixture pairs a monostatic Doppler (calculate_doppler: 2*v*fc/c) with a true "
-        "bistatic range (calculate_bistatic_range), so the two disagree. The coupled filter "
-        "reads Doppler as the range rate and rejects the mismatch, splitting the aircraft into "
-        "three tracks; one carries fewer than ANOMALY_RAISE_N observations and never latches "
-        "supersonic. Fixing it means deriving Doppler from the bistatic range rate, which "
-        "changes what every supersonic test in this file asserts.",
-    )
     def test_intermittent_adsb(self):
         """Test aircraft with ADS-B present only some fraction of the time."""
         print("\n" + "=" * 70)
@@ -969,7 +960,8 @@ class TestIntegrationSyntheticAnomalies:
             track_deg = motion.get_heading(current_time)
 
             delay = calculate_bistatic_range(lat, lon, 50000)
-            doppler = calculate_doppler(gs_knots)
+            ahead = calculate_bistatic_range(*motion.get_position(current_time + 0.01), 50000)
+            doppler = -(ahead - delay) / 0.01 / (SPEED_OF_LIGHT / FC_HZ / 1000.0)
 
             det = {
                 "delay": delay,

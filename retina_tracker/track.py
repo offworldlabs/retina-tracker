@@ -21,8 +21,8 @@ from .config import (
     MACH_1_MS,
     MAX_DIRECTION_CHANGE_DEG_PER_SEC,
     MAX_NORMAL_ACCEL_MS2,
-    MEASUREMENT_NOISE_DELAY,
-    MEASUREMENT_NOISE_DOPPLER,
+    MEASUREMENT_NOISE_DELAY_KM2,
+    MEASUREMENT_NOISE_DOPPLER_HZ2,
     N_COAST,
     N_DELETE,
     N_WINDOW,
@@ -678,15 +678,15 @@ class Track:
         self.adsb_initialized = True
 
         self._init_from_delay_doppler(detection)
-        self.covariance[0, 0] = adsb_config["initial_covariance"]["position"] / 1000.0
+        self.covariance[0, 0] = (adsb_config["initial_covariance"]["position"] / 1000.0) ** 2
 
     def _init_from_delay_doppler(self, detection):
         wavelength = WAVELENGTH_KM()
         self.state = np.array([detection["delay"], doppler_to_range_rate(detection["doppler"]), 0.0])
         self.covariance = np.diag(
             [
-                MEASUREMENT_NOISE_DELAY,
-                wavelength * wavelength * MEASUREMENT_NOISE_DOPPLER,
+                MEASUREMENT_NOISE_DELAY_KM2(),
+                wavelength * wavelength * MEASUREMENT_NOISE_DOPPLER_HZ2(),
                 INITIAL_RANGE_ACCEL_VARIANCE,
             ]
         )

@@ -46,6 +46,7 @@ radar:
 # motion model is failing.
 process_noise:
   range_jerk: 1.0e-7      # Bistatic range jerk PSD floor (km^2/s^5)
+  range_rate: 1.0e-5      # Range-rate random walk PSD (km^2/s^3), docs/measurement-noise.md
   adaptive: true          # Widen from the floor on the filter's own residuals
   max_scale: 25.0         # Ceiling on that widening
   nis_memory: 0.25        # Weight on the newest residual, so ~4 frames of memory
