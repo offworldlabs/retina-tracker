@@ -39,6 +39,37 @@ def track_sources(track: dict, index: dict[tuple, str | None]) -> list[str | Non
     return out
 
 
+def blank_crossings(truths: list[dict], frames: list[dict], tracks: list[dict]) -> tuple[int, int]:
+    """How many zero-Doppler crossings a track carried, of those it reached.
+
+    blah2 blanks Doppler near zero, so an aircraft's detections change sign
+    across a gap. A crossing is reached when the detection before the gap is in
+    a track, and held when that track also holds any of the aircraft's
+    detections on the far side, before its next crossing.
+    """
+    owner = {}
+    for track in tracks:
+        history = track["history"]
+        for timestamp, delay, doppler in zip(history["timestamps"], history["delays"], history["dopplers"]):
+            if delay is not None:
+                owner[(timestamp, delay, doppler)] = track.get("id") or id(track)
+    by_source: dict[str, list[tuple]] = defaultdict(list)
+    for frame, truth in zip(frames, truths):
+        for delay, doppler, source in zip(frame["delay"], frame["doppler"], truth["sources"]):
+            if source is not None:
+                by_source[source].append((frame["timestamp"], delay, doppler))
+    reached = held = 0
+    for detections in by_source.values():
+        flips = [i for i in range(1, len(detections)) if (detections[i][2] > 0) != (detections[i - 1][2] > 0)]
+        for start, end in zip(flips, flips[1:] + [len(detections)]):
+            before = owner.get(detections[start - 1])
+            if before is None:
+                continue
+            reached += 1
+            held += any(owner.get(d) == before for d in detections[start:end])
+    return reached, held
+
+
 def score(truths: list[dict], frames: list[dict], tracks: list[dict], min_associations: int = 3) -> dict:
     index = build_source_index(truths, frames)
 
@@ -88,6 +119,8 @@ def score(truths: list[dict], frames: list[dict], tracks: list[dict], min_associ
     found = {h for h in detected_aircraft if h in per_aircraft}
     fragmentation = [len(per_aircraft[h]) for h in found]
 
+    crossings_reached, crossings_held = blank_crossings(truths, frames, considered)
+
     anomalous = [t for t in considered if t.get("is_anomalous")]
     anomaly_types = Counter(a for t in considered for a in t.get("anomaly_types", []))
 
@@ -109,6 +142,9 @@ def score(truths: list[dict], frames: list[dict], tracks: list[dict], min_associ
         "detection_recall": round(covered_target_detections / max(total_target_detections, 1), 3),
         "clutter_absorbed": covered_clutter,
         "clutter_absorbed_rate": round(covered_clutter / max(total_clutter, 1), 3),
+        "blank_crossings_reached": crossings_reached,
+        "blank_crossings_held": crossings_held,
+        "blank_crossing_rate": round(crossings_held / crossings_reached, 3) if crossings_reached else None,
         "anomalous_tracks": len(anomalous),
         "anomaly_false_positive_rate": round(len(anomalous) / max(len(considered), 1), 3),
         "anomaly_types": dict(anomaly_types),
