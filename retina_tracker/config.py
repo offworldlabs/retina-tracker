@@ -39,6 +39,7 @@ def load_blah2_config(blah2_config_path):
             "dopplerMax": ambiguity.get("dopplerMax"),
             "delayMin": ambiguity.get("delayMin"),
             "delayMax": ambiguity.get("delayMax"),
+            "minDoppler": config.get("process", {}).get("detection", {}).get("minDoppler"),
         }
         found = {k: v for k, v in found.items() if v is not None}
         for lo, hi in (("dopplerMin", "dopplerMax"), ("delayMin", "delayMax")):
@@ -116,6 +117,10 @@ def load_config(config_path=None):
             "doppler_max": None,
             "delay_min_bins": None,
             "delay_max_bins": None,
+            # blah2's detector drops anything within this many Hz of zero, so
+            # a target crossing zero Doppler is invisible for as long as it
+            # takes to cross. None means nobody has said.
+            "doppler_blank": None,
         },
         "tcp": {
             "host": "0.0.0.0",
@@ -250,6 +255,16 @@ def DOPPLER_MIN_HZ():
 
 def DOPPLER_MAX_HZ():
     return _get_param("radar", "doppler_max")
+
+
+def DOPPLER_BLANK_HZ():
+    """Half-width of the band around zero Doppler that blah2 never reports.
+
+    process.detection.minDoppler. A target inside it cannot be detected
+    however strong it is, so a confirmed track predicted there is occluded
+    rather than missing.
+    """
+    return _get_param("radar", "doppler_blank")
 
 
 def ordered_bounds(lo, hi):

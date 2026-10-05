@@ -10,6 +10,9 @@ from . import geometry
 from .config import (
     ALTITUDE_JUMP_THRESHOLD_FT,
     ANOMALOUS_ACCEL_MS2,
+    DOPPLER_BIN_HZ,
+    DOPPLER_BLANK_HZ,
+    GATE_THRESHOLD,
     INITIAL_RANGE_ACCEL_VARIANCE,
     KNOTS_TO_MS,
     LONG_HOVER_MIN_DURATION_S,
@@ -36,9 +39,10 @@ from .config import (
     _get_param,
     get_mach1_doppler_threshold,
 )
-from .kalman import MEASUREMENT_DIM, doppler_to_range_rate
+from .kalman import MEASUREMENT_DIM, doppler_to_range_rate, range_rate_to_doppler
 
 TRACK_HISTORY_MAX = 600
+MAX_OCCLUDED_S = 120.0
 
 
 class TrackState(Enum):
@@ -115,6 +119,10 @@ class Track:
         self.n_frames = 1
         self.n_associated = 0
         self.n_missed = 0
+        self.occluded_s = 0.0
+        self.blanked = False
+        self.last_doppler = detection["doppler"]
+        self.last_update_ms = timestamp
         self.n_observations = 1
         self.nis_ema = float(MEASUREMENT_DIM)
         self.last_dt = None
@@ -774,6 +782,10 @@ class Track:
 
         self.n_associated += 1
         self.n_missed = 0
+        self.occluded_s = 0.0
+        self.blanked = False
+        self.last_doppler = detection["doppler"]
+        self.last_update_ms = timestamp
         self.n_frames += 1
 
         self.total_snr += detection.get("snr", 0)
@@ -790,8 +802,15 @@ class Track:
         self._check_long_hover(detection, timestamp)
 
     def mark_missed(self, timestamp, frame=0):
-        """Mark track as not associated this frame."""
-        self.n_missed += 1
+        """Mark track as not associated this frame.
+
+        A miss the zero-Doppler blank explains is not counted towards deletion.
+        """
+        if self.is_occluded():
+            self.blanked = self.blanked or self._predicted_through_blank()
+            self.occluded_s += self.last_dt or 0.0
+        else:
+            self.n_missed += 1
         self.n_frames += 1
 
         self.history["timestamps"].append(timestamp)
@@ -801,6 +820,31 @@ class Track:
         self.history["state_status"].append(self.state_status.name)
 
         self.death_timestamp = timestamp
+
+    def is_occluded(self):
+        """Whether blah2's zero-Doppler blank can explain a confirmed track going undetected.
+
+        Once the prediction has entered or crossed the blank this latches until the next
+        association: when the target leaves the blank depends on an acceleration too poorly
+        estimated going in to trust. See docs/zero-doppler-blank.md.
+        """
+        if DOPPLER_BLANK_HZ() is None or self.state_status == TrackState.TENTATIVE:
+            return False
+        if self.blanked or self._predicted_through_blank():
+            return True
+        reach = np.sqrt(GATE_THRESHOLD() * self.covariance[1, 1]) / WAVELENGTH_KM()
+        return abs(range_rate_to_doppler(self.state[1])) - reach < self._blank_edge_hz()
+
+    def max_occluded_s(self):
+        """A track is held no longer than it was observed: extrapolating further is a guess."""
+        return min(MAX_OCCLUDED_S, (self.last_update_ms - self.birth_timestamp) / 1000.0)
+
+    def _blank_edge_hz(self):
+        return DOPPLER_BLANK_HZ() + DOPPLER_BIN_HZ()
+
+    def _predicted_through_blank(self):
+        doppler = range_rate_to_doppler(self.state[1])
+        return abs(doppler) < self._blank_edge_hz() or (doppler > 0) != (self.last_doppler > 0)
 
     def get_predicted_measurement(self):
         return self.kf.H @ self.state
@@ -888,7 +932,7 @@ class Track:
         if self.state_status == TrackState.TENTATIVE:
             return self.n_frames > N_WINDOW()
         else:
-            return self.n_missed > N_DELETE()
+            return self.n_missed > N_DELETE() or self.occluded_s > self.max_occluded_s()
 
     def get_length_bucket(self):
         if self.n_associated < 10:

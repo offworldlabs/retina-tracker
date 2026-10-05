@@ -33,6 +33,10 @@ radar:
   doppler_max:            # process.ambiguity.dopplerMax, Hz
   delay_min_bins:         # process.ambiguity.delayMin, in delay bins
   delay_max_bins:         # process.ambiguity.delayMax, in delay bins
+  # process.detection.minDoppler, Hz. blah2 never reports within this of zero
+  # Doppler, so a confirmed track predicted there is held rather than deleted
+  # (docs/zero-doppler-blank.md). Unset here for the same reason as the span.
+  doppler_blank:
 
 # Process noise. Bistatic range acceleration is dominated by geometry rather
 # than by the aircraft, so it differs more between sites than between flight
