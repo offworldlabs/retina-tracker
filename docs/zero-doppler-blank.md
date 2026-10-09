@@ -176,6 +176,35 @@ loose at long gaps while `Q` is uncalibrated. Worth revisiting after Phase 2.
 cost with `d^2 + ln|S|`, which stops the widest gate winning by default, moved
 crossings by 2 points and nothing else measurably.
 
+## Goal: stitch fragments retroactively
+
+We want to retroactively stitch tracks together when we think they belong to the
+same aircraft, so that tracks already reported under separate IDs end up as one.
+This serves two separate goals.
+
+1. **An ADS-B-verified aircraft shows as a single track.** Fragmented tracks
+   carrying the same ICAO hex are one aircraft, however many times the tracker
+   broke it. The hex is used rather than the callsign because it is the stable
+   identifier and the one the tracker stores.
+2. **The filter only has to model well-constrained physics.** It should not
+   widen its gates or process noise to survive a dramatic change of velocity or
+   direction. When an aircraft does that, the track may break, and stitching
+   rejoins it afterwards: two tracks at clearly different Doppler, one ending at
+   roughly the time the other begins, at a continuous delay. No ADS-B is needed
+   for this case.
+
+The second goal is a design rule for the filter, not only a feature. It is why
+`R` can be one resolution cell (docs/measurement-noise.md) and why `Q` should
+not be raised to catch manoeuvres: a wider `Q` brought the jumps back on
+fairforest B. Stitching is how to recover the real aircraft a tight filter
+splits, such as the a7e1d3 crossing that one-cell `R` cost on jn1.
+
+What it has to get right: a join between two different aircraft, or between an
+aircraft and a CW-tone track, is worse than leaving the fragments apart. Today
+only dead tracks are merged (`Tracker._merge_tracks`: 5 s, 5 km, 50 Hz) and a
+merge is never emitted, so consumers would also need to be told when two ids
+become one.
+
 ## Universality
 
 Nothing here is per-site. The blank comes from the node's own blah2 config, the
