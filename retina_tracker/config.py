@@ -387,36 +387,4 @@ def TRACKLET_MAX_TIME_SPAN():
     return _get_param("tracklet", "max_time_span", 3.0)
 
 
-# Anomaly detection constants
 SPEED_OF_LIGHT = 299792458.0
-MACH_1_MS = 343.0
-KNOTS_TO_MS = 0.514444
-MAX_NORMAL_ACCEL_MS2 = 15.0
-MAX_DIRECTION_CHANGE_DEG_PER_SEC = 30.0
-
-# Sustained orbit detection
-ORBIT_HEADING_WINDOW = 4  # consecutive frames to accumulate
-ORBIT_MIN_CUMULATIVE_DEG = 270.0  # total |heading change| over window to flag
-
-# GPS spoof detection (position mismatch)
-SPOOF_POSITION_EPSILON_DEG = 0.002  # ~220 m — below this ADS-B is "frozen"
-SPOOF_MIN_SPEED_KTS = 50  # aircraft must report moving
-SPOOF_MIN_FROZEN_FRAMES = 2  # consecutive frozen frames to flag
-
-# Altitude anomaly
-ALTITUDE_JUMP_THRESHOLD_FT = 8000.0  # impossible alt change in one frame
-
-# Anomalous acceleration (extreme, >10g)
-ANOMALOUS_ACCEL_MS2 = 98.1  # 10g × 9.81 m/s²
-
-# Long hover detection
-LONG_HOVER_POSITION_EPSILON_DEG = 0.001  # ~111 m — position "frozen" threshold
-LONG_HOVER_MIN_DURATION_S = 900.0  # 15 minutes
-
-
-def get_mach1_doppler_threshold():
-    """Calculate Doppler threshold for Mach 1 based on center frequency.
-
-    Uses worst-case bistatic geometry (TX/RX collocated): f_d = 2 * v * fc / c
-    """
-    return 2 * MACH_1_MS * CENTER_FREQUENCY_HZ() / SPEED_OF_LIGHT

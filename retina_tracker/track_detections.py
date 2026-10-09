@@ -21,11 +21,7 @@ from .cli import (
 )
 from .config import (
     GATE_THRESHOLD,
-    KNOTS_TO_MS,
     M_THRESHOLD,
-    MACH_1_MS,
-    MAX_DIRECTION_CHANGE_DEG_PER_SEC,
-    MAX_NORMAL_ACCEL_MS2,
     MEASUREMENT_NOISE_DELAY_KM2,
     MEASUREMENT_NOISE_DOPPLER_HZ2,
     MIN_SNR,
@@ -38,7 +34,6 @@ from .config import (
     TRACKLET_MAX_DOPPLER_RESIDUAL,
     TRACKLET_MAX_TIME_SPAN,
     get_config,
-    get_mach1_doppler_threshold,
     load_blah2_config,
     load_config,
     set_config,
@@ -78,11 +73,6 @@ __all__ = [
     "TRACKLET_MAX_DOPPLER_RESIDUAL",
     "TRACKLET_MAX_TIME_SPAN",
     "SPEED_OF_LIGHT",
-    "MACH_1_MS",
-    "KNOTS_TO_MS",
-    "MAX_NORMAL_ACCEL_MS2",
-    "MAX_DIRECTION_CHANGE_DEG_PER_SEC",
-    "get_mach1_doppler_threshold",
     # Core classes
     "KalmanFilter",
     "TrackState",

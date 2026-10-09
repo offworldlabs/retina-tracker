@@ -1,9 +1,7 @@
 """Score tracker output against synthetic ground truth.
 
 Answers the questions live data cannot: which detections were really the same
-aircraft, whether a track held one identity throughout, and whether an anomaly
-flag was earned. The generated traffic is entirely ordinary, so every anomaly
-raised against it is a false positive by construction.
+aircraft, and whether a track held one identity throughout.
 
 Detections are matched back to truth on (timestamp, delay, doppler), which is
 exact: both sides carry the same 2 dp values the wire format uses.
@@ -121,9 +119,6 @@ def score(truths: list[dict], frames: list[dict], tracks: list[dict], min_associ
 
     crossings_reached, crossings_held = blank_crossings(truths, frames, considered)
 
-    anomalous = [t for t in considered if t.get("is_anomalous")]
-    anomaly_types = Counter(a for t in considered for a in t.get("anomaly_types", []))
-
     return {
         "frames": len(frames),
         "aircraft_detectable": len(detected_aircraft),
@@ -145,9 +140,6 @@ def score(truths: list[dict], frames: list[dict], tracks: list[dict], min_associ
         "blank_crossings_reached": crossings_reached,
         "blank_crossings_held": crossings_held,
         "blank_crossing_rate": round(crossings_held / crossings_reached, 3) if crossings_reached else None,
-        "anomalous_tracks": len(anomalous),
-        "anomaly_false_positive_rate": round(len(anomalous) / max(len(considered), 1), 3),
-        "anomaly_types": dict(anomaly_types),
     }
 
 

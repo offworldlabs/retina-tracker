@@ -322,9 +322,7 @@ class Tracker:
                         track,
                         adsb_hex=track.adsb_hex,
                         adsb_initialized=track.adsb_initialized,
-                        is_anomalous=track.is_anomalous,
                         max_velocity_ms=track.max_velocity_ms,
-                        anomaly_types=track.anomaly_types,
                         shadow_fraction=track.shadow_fraction(),
                         interference_fraction=track.interference_fraction(),
                     )
@@ -337,9 +335,7 @@ class Tracker:
                         detections_window,
                         adsb_hex=track.adsb_hex,
                         adsb_initialized=track.adsb_initialized,
-                        is_anomalous=track.is_anomalous,
                         max_velocity_ms=track.max_velocity_ms,
-                        anomaly_types=track.anomaly_types,
                         shadow_fraction=track.shadow_fraction(),
                         interference_fraction=track.interference_fraction(),
                     )
@@ -364,9 +360,7 @@ class Tracker:
                             track,
                             adsb_hex=track.adsb_hex,
                             adsb_initialized=track.adsb_initialized,
-                            is_anomalous=track.is_anomalous,
                             max_velocity_ms=track.max_velocity_ms,
-                            anomaly_types=track.anomaly_types,
                         )
                     else:
                         detections_list = track.get_recent_detections(n=_det_n)
@@ -377,9 +371,7 @@ class Tracker:
                             detections_list,
                             adsb_hex=track.adsb_hex,
                             adsb_initialized=track.adsb_initialized,
-                            is_anomalous=track.is_anomalous,
                             max_velocity_ms=track.max_velocity_ms,
-                            anomaly_types=track.anomaly_types,
                         )
 
         # Initiation only. A detection in an interfering bin that an
@@ -687,9 +679,7 @@ class Tracker:
                         detections_list,
                         adsb_hex=track.adsb_hex,
                         adsb_initialized=track.adsb_initialized,
-                        is_anomalous=track.is_anomalous,
                         max_velocity_ms=track.max_velocity_ms,
-                        anomaly_types=track.anomaly_types,
                         shadow_fraction=track.shadow_fraction(),
                         interference_fraction=track.interference_fraction(),
                     )
@@ -785,8 +775,8 @@ def _frame_track(track, state, hit):
         "n_associated": track.n_associated,
         "n_missed": track.n_missed,
         "adsb_hex": track.adsb_hex,
-        "is_anomalous": track.is_anomalous,
-        "anomaly_types": sorted(track.anomaly_types),
+        "is_anomalous": False,
+        "anomaly_types": [],
         "max_velocity_ms": float(track.max_velocity_ms),
         "born_timestamp": track.birth_timestamp,
         "avg_snr": float(avg_snr) if math.isfinite(avg_snr) else None,
