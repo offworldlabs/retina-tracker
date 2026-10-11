@@ -19,12 +19,13 @@ radar:
 
 # Process noise. Bistatic range acceleration is dominated by geometry rather
 # than by the aircraft, so it differs more between sites than between flight
-# phases: two nodes measured 2.9x apart, driven by traffic passing at 29.8 km
-# against 5.8 km. There is therefore no single right jerk, so range_jerk is a
-# floor and the filter widens from it by however far its own residuals say its
-# motion model is failing.
+# phases. Fitted by replaying recorded aircraft tracks against measured R: white
+# jerk of 1e-6 to 3e-6 km^2/s^5 at far-traffic jn2 and 1e-5 at close-traffic jn1
+# and fairforest B. range_jerk is the floor, and the filter widens from it by
+# however far its own residuals say its motion model is failing, which carries
+# it to each site's value with nothing set per site. docs/measurement-noise.md.
 process_noise:
-  range_jerk: 1.0e-7      # Bistatic range jerk PSD floor (km^2/s^5)
+  range_jerk: 1.0e-6      # Bistatic range jerk PSD floor (km^2/s^5)
   adaptive: true          # Widen from the floor on the filter's own residuals
   max_scale: 25.0         # Ceiling on that widening
   nis_memory: 0.25        # Weight on the newest residual, so ~4 frames of memory

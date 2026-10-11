@@ -58,15 +58,16 @@ def test_delay_noise_stops_growing_below_0_db():
     assert np.allclose(delay_noise_scale(np.array([10.0, 20.0])), [1.0, 10.0**-0.4])
 
 
-def test_process_noise_carries_a_range_rate_random_walk():
-    config = use()
-    config["process_noise"]["range_jerk"] = 0.0
-    config["process_noise"]["range_rate"] = 1e-5
+def test_process_noise_is_white_jerk_at_the_fitted_floor_times_the_adaptive_scale():
+    use()
     kf = KalmanFilter()
     kf.dt = 2.0
-    _, covariance = kf.predict(np.zeros(3), np.zeros((3, 3)))
-    assert covariance[1, 1] == pytest.approx(1e-5 * 2.0)
-    assert covariance[0, 0] == pytest.approx(1e-5 * 8.0 / 3.0)
+    _, floor = kf.predict(np.zeros(3), np.zeros((3, 3)))
+    assert floor[2, 2] == pytest.approx(1e-6 * 2.0)
+    assert floor[1, 1] == pytest.approx(1e-6 * 2.0**3 / 3.0)
+    assert floor[0, 0] == pytest.approx(1e-6 * 2.0**5 / 20.0)
+    _, widened = kf.predict(np.zeros(3), np.zeros((3, 3)), q_scale=10.0)
+    assert np.allclose(widened, 10.0 * floor)
 
 
 def confirmed(tracker, doppler=-80.0, frames=10):

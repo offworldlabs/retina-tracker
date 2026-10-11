@@ -10,7 +10,6 @@ from .config import (
     MEASUREMENT_NOISE_DELAY_SNR_EXPONENT,
     MEASUREMENT_NOISE_RANGE_RATE_KM2,
     PROCESS_NOISE_JERK,
-    PROCESS_NOISE_RANGE_RATE,
     WAVELENGTH_KM,
 )
 
@@ -133,13 +132,6 @@ class KalmanFilter:
         Q[1, 1] = jerk * dt3 / 3.0
         Q[1, 2] = Q[2, 1] = jerk * dt2 / 2.0
         Q[2, 2] = jerk * dt
-        # A range-rate random walk on top of the jerk: model error that grows
-        # with the prediction interval far faster than white jerk allows for.
-        rate = PROCESS_NOISE_RANGE_RATE()
-        Q[0, 0] += rate * dt3 / 3.0
-        Q[0, 1] += rate * dt2 / 2.0
-        Q[1, 0] = Q[0, 1]
-        Q[1, 1] += rate * dt
 
         state_pred = F @ state
         cov_pred = F @ covariance @ F.T + Q

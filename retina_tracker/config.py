@@ -88,8 +88,7 @@ def load_config(config_path=None):
             "detection_window": 20,
         },
         "process_noise": {
-            "range_jerk": 1e-7,
-            "range_rate": 1e-5,
+            "range_jerk": 1e-6,
             "adaptive": True,
             "max_scale": 25.0,
             "nis_memory": 0.25,
@@ -343,11 +342,7 @@ def INTERFERENCE_MIN_SAMPLES():
 
 
 def PROCESS_NOISE_JERK():
-    return _get_param("process_noise", "range_jerk", 1e-7)
-
-
-def PROCESS_NOISE_RANGE_RATE():
-    return _get_param("process_noise", "range_rate", 1e-5)
+    return _get_param("process_noise", "range_jerk", 1e-6)
 
 
 def PROCESS_NOISE_ADAPTIVE():

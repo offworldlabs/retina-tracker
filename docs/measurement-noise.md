@@ -78,13 +78,42 @@ Against the one-cell bound this is about 10x tighter in delay and 7x (VHF) or 3x
 
 ### Process noise
 
-`Q` gains a range-rate random walk, `process_noise.range_rate` = 1e-5 km^2/s^3,
-on top of the existing white jerk. The plan measured model error growing as
-roughly `L^2` in the prediction interval where white jerk alone gives `L^5`, and
-`R` was the term hiding that. A tighter `R` without a `Q` that grows faster over
-short intervals loses aircraft where Doppler slews hard. This term is a property
-of aircraft motion in range rate, not of the radar, so it is the same at every
-site.
+**5 October.** With `R` at one cell, `Q` gained a range-rate random walk of
+1e-5 km^2/s^3 on top of white jerk, chosen from 0, 1e-5 and 1e-4 on the replays
+(table below): without it fairforest B lost crossings, at 1e-4 the jumps came back.
+
+**11 October, fitted against measured `R`.** Each node's ADS-B-labelled tracks
+were replayed offline through the filter with `R` fixed at the measured values,
+over a grid of white jerk (0 to 1e-4 km^2/s^5) and range-rate random walk (0 to
+3e-4 km^2/s^3). The best `Q` is the one whose median NIS sits at its matched
+value, 2 ln 2 = 1.39, across prediction intervals, weighted by how many updates
+each interval holds. The prediction interval is the true time since the track's
+previous update, because the recorded interval omits frames held through the
+zero-Doppler blank.
+
+| Node | Traffic | Best white jerk (km^2/s^5) | Best range-rate walk | Median NIS at 0.5 s / 1 s / 1.5-2.5 s / 3-6 s / over 6 s |
+| --- | --- | --- | --- | --- |
+| jn1 | close, VHF | 1e-5 | 0 | 1.32 / 1.92 / 2.15 / 1.78 / 0.48 |
+| fairforest B | VHF | 1e-5 | 0 | 1.33 / 2.21 / 2.59 / 2.08 / 0.63 |
+| jn2 | far, UHF | 1e-6 (3e-6 next) | 0 | 1.37 / 1.46 / 1.73 / 1.70 / too few |
+
+Three conclusions:
+
+- **The range-rate walk is not supported once `R` is right.** Every node's best
+  fit had it at zero. On 5 October it was compensating for an `R` ten times too
+  large, so it is removed.
+- **The size of `Q` depends on the site**, 10x between close-traffic jn1 and
+  far-traffic jn2, as expected of a quantity dominated by geometry. The floor is
+  set at 1e-6 and the adaptive scaling, which widens `Q` by however far the
+  filter's own NIS says the motion model is failing, carries it towards 1e-5 at
+  close-traffic sites. Its ceiling of 25x covers that. Nothing is set per site.
+- **No single Gaussian `Q` matches every interval.** Even at the best fit the
+  filter is right at one frame, overconfident at 1-6 s and overcautious beyond
+  6 s. That is the signature of aircraft that mostly fly smoothly and
+  occasionally manoeuvre. Rather than inflating `Q` to catch the manoeuvres,
+  which widens every gate for every track, the filter stays tight and the breaks
+  are left to adaptive widening and to stitching tracks afterwards
+  (docs/zero-doppler-blank.md).
 
 ### ADS-B no longer changes where a track starts
 
@@ -143,9 +172,9 @@ residuals and runs at about 1.3 cells, so some of its simulated detections fall
 outside a one-cell gate. Real radar noise is a fraction of a cell, and no node
 replay lost a real aircraft that way.
 
-## Choosing range_rate
+## Choosing range_rate, 5 October (superseded)
 
-Tried at 0, 1e-5 and 1e-4 km^2/s^3 with one-cell `R`:
+Tried at 0, 1e-5 and 1e-4 km^2/s^3 with one-cell `R`; removed on 11 October:
 
 | | jn1 jumps | fairforest B jumps | fairforest B crossings | Harness close ID switches |
 | --- | --- | --- | --- | --- |

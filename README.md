@@ -61,8 +61,7 @@ tracker:
   detection_window: 20    # Rolling detection window size
 
 process_noise:
-  range_jerk: 1.0e-7      # Bistatic range jerk PSD floor (km^2/s^5)
-  range_rate: 1.0e-5      # Range-rate random walk PSD (km^2/s^3)
+  range_jerk: 1.0e-6      # Bistatic range jerk PSD floor (km^2/s^5), widened per site on the filter's own residuals
 
 output:
   max_bytes: 67108864     # Rotate the -s events file at this size (64 MiB, 0 disables)
