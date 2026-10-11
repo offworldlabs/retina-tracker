@@ -7,7 +7,8 @@ import numpy as np
 
 from .config import (
     MEASUREMENT_NOISE_DELAY_KM2,
-    MEASUREMENT_NOISE_DOPPLER_HZ2,
+    MEASUREMENT_NOISE_DELAY_SNR_EXPONENT,
+    MEASUREMENT_NOISE_RANGE_RATE_KM2,
     PROCESS_NOISE_JERK,
     PROCESS_NOISE_RANGE_RATE,
     WAVELENGTH_KM,
@@ -25,6 +26,19 @@ def _symmetrised(covariance):
     its rate, and the association gate reads S as symmetric when it applies
     Sylvester's criterion to it."""
     return (covariance + covariance.T) / 2.0
+
+
+def delay_noise_scale(snr):
+    """Delay noise variance relative to its 10 dB value, for a scalar or an array of SNRs.
+
+    The one formula behind both the update and the association gate, so the
+    two cannot weight and admit a detection through different covariances.
+    Doppler noise does not scale: measured, it barely depends on SNR.
+    """
+    if snr is None:
+        return 1.0
+    snr_linear = 10.0 ** (np.asarray(snr, dtype=float) / 10.0)
+    return np.maximum(snr_linear / 10.0, 0.1) ** -MEASUREMENT_NOISE_DELAY_SNR_EXPONENT
 
 
 def doppler_to_range_rate(doppler_hz):
@@ -79,8 +93,12 @@ class KalmanFilter:
 
     @property
     def R(self):
-        wavelength = WAVELENGTH_KM()
-        return np.diag([MEASUREMENT_NOISE_DELAY_KM2(), wavelength * wavelength * MEASUREMENT_NOISE_DOPPLER_HZ2()])
+        return np.diag([MEASUREMENT_NOISE_DELAY_KM2(), MEASUREMENT_NOISE_RANGE_RATE_KM2()])
+
+    def measurement_noise(self, snr):
+        R = self.R
+        R[0, 0] *= float(delay_noise_scale(snr))
+        return R
 
     def predict(self, state, covariance, q_scale=1.0):
         """Advance one frame.
@@ -136,19 +154,8 @@ class KalmanFilter:
 
         return state_pred, _symmetrised(cov_pred)
 
-    @staticmethod
-    def measurement_noise_scale(snr):
-        """SNR → multiplicative scale on R.  One formula, used by both the
-        update and the association gate — they used to disagree: update scaled
-        R by SNR while gating used the raw R, so a high-SNR detection was
-        admitted through a looser covariance than the one that weighted it."""
-        if snr is None:
-            return 1.0
-        snr_linear = 10 ** (snr / 10)
-        return 1.0 / max(snr_linear / 10, 0.1)
-
     def update(self, state, covariance, measurement, snr=None):
-        R = self.R * self.measurement_noise_scale(snr)
+        R = self.measurement_noise(snr)
 
         z_pred = self.H @ state
         innovation = measurement - z_pred
@@ -167,7 +174,7 @@ class KalmanFilter:
         return state_upd, _symmetrised(cov_upd), Residual(innovation, S, nis)
 
     def get_innovation_covariance(self, covariance, snr=None):
-        S = self.H @ covariance @ self.H.T + self.R * self.measurement_noise_scale(snr)
+        S = self.H @ covariance @ self.H.T + self.measurement_noise(snr)
         return S
 
     def get_innovation_base(self, covariance):

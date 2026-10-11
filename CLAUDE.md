@@ -134,7 +134,7 @@ Tests are located in the `tests/` directory:
 - `test_geometry.py` - Coordinate conversion and geometry functions
 - `test_adsb_features.py` - ADS-B tracking features
 - `test_blank_occlusion.py` - Holding tracks through blah2's zero-Doppler blank
-- `test_measurement_noise.py` - Measurement noise sized from the resolution cell
+- `test_measurement_noise.py` - Measured measurement noise and its SNR scaling
 
 All tests must pass before committing.
 

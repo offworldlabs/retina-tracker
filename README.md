@@ -6,7 +6,7 @@ Multi-target tracker for bistatic passive radar detection data from [blah2](http
 
 This tracker processes delay-Doppler detections to create continuous tracks of targets (typically commercial aircraft) in high-clutter environments. It uses:
 
-- **Kalman filtering** with a constant-acceleration model on bistatic range, measurement noise sized from the node's resolution cell (docs/measurement-noise.md)
+- **Kalman filtering** with a constant-acceleration model on bistatic range, measurement noise measured on three nodes (docs/measurement-noise.md)
 - **Global Nearest Neighbor (GNN)** data association with Hungarian algorithm
 - **M-of-N confirmation** logic for track promotion
 - **Tracklet-based initiation** for robust track creation
@@ -75,25 +75,16 @@ adsb:
     latitude: 37.7644     # San Francisco (150 Mississippi)
     longitude: -122.3954
     altitude: 23          # meters above WGS84 ellipsoid
-  initial_covariance:
-    position: 100.0       # Position uncertainty (meters)
-    velocity: 5.0         # Velocity uncertainty (m/s)
 ```
 
 ### ADS-B-Assisted Tracking
 
-When enabled, the tracker uses ADS-B position data to:
+When enabled, ADS-B matches attached to detections by blah2-api are used to:
 
-1. **Improve initialization**: Lower initial covariance for ADS-B tracks (100m vs 10km for radar-only)
-2. **Better velocity estimates**: Use ground speed and track angle instead of zero assumption
-3. **Persistent identity**: Track IDs use ICAO hex (e.g., `250618-A12345`) instead of sequential counters
-4. **Priority association**: ADS-B tracks get 20% cost reduction during data association
+1. **Label tracks**: a track carries the ICAO hex of the first valid match it takes, in its own `adsb_hex` field. Track IDs are sequential counters, never derived from the hex.
+2. **Priority association**: ADS-B tracks get a 20% cost reduction during data association.
 
-**Benefits:**
-- Faster track confirmation (fewer M-of-N cycles needed)
-- Better association quality with more confident state predictions
-- Direct radar-vs-ADS-B comparison for validation
-- Track continuity across sessions via ICAO hex
+A track's state always starts from the radar detection itself, whose measured noise (about 18 m in delay at 10 dB, docs/measurement-noise.md) is tighter than an ADS-B position.
 
 **Backward Compatibility:**
 - ADS-B disabled by default (`enabled: false`)

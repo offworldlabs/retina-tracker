@@ -15,6 +15,7 @@ at the moment the detection arrives.
 import pytest
 
 from retina_tracker.config import get_config, set_config
+from retina_tracker.kalman import doppler_to_range_rate
 from retina_tracker.server import process_streaming_frame
 from retina_tracker.tracker import Tracker
 
@@ -69,9 +70,11 @@ def frame(tracker, timestamp, points):
     )
 
 
-def steady_target(tracker, frames, delay=10.0, doppler=50.0, snr=15.0, start=1000, step=500):
-    for i in range(frames):
-        frame(tracker, start + i * step, [(delay + i * 0.05, doppler - i * 0.2, snr)])
+def steady_target(tracker, frames, delay=10.0, doppler=50.0, snr=15.0, start=1000, step=500, first=0):
+    """A target whose delay moves exactly as its own Doppler says, from frame `first` of its trajectory."""
+    per_frame = doppler_to_range_rate(doppler) * step / 1000.0
+    for i in range(first, first + frames):
+        frame(tracker, start + i * step, [(delay + i * per_frame, doppler, snr)])
 
 
 def drain(tracker, start_ts=900000, max_frames=120):
@@ -195,7 +198,7 @@ def test_a_detection_joining_an_established_track_is_not_delayed(sink):
     steady_target(tracker, 12)
     released_before = len(sink.calls)
 
-    steady_target(tracker, 1, start=1000 + 12 * 500)
+    steady_target(tracker, 1, first=12)
     assert len(sink.calls) == released_before + 1
 
 

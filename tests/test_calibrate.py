@@ -25,6 +25,7 @@ from retina_tracker.calibrate import (
     usable,
     wavelength_km,
 )
+from retina_tracker.kalman import range_rate_to_doppler
 from retina_tracker.output import InnovationWriter
 from retina_tracker.tracker import Tracker
 
@@ -200,7 +201,8 @@ class TestItReadsWhatTheTrackerWrites:
         writer = InnovationWriter(str(path), max_bytes=0)
         tracker = Tracker(innovation_writer=writer)
         for i in range(60):
-            tracker.process_frame([{"delay": 20.0 - 0.05 * i, "doppler": -120.0, "snr": 16.0}], 1718747745000 + i * 500)
+            detection = {"delay": 20.0 - 0.05 * i, "doppler": range_rate_to_doppler(-0.1), "snr": 16.0}
+            tracker.process_frame([detection], 1718747745000 + i * 500)
         writer.close()
 
         records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]

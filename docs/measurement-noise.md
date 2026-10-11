@@ -1,4 +1,4 @@
-# Measurement noise from the resolution cell
+# Measurement noise
 
 ## The problem: tracks jumping kilometres
 
@@ -22,17 +22,61 @@ about 7 delay cells, and `measurement_noise_scale` inflates it at low SNR, to
 about 2 km at 4 dB. The association gate was therefore about +/-6 km in delay
 for exactly the detections most likely to be false alarms.
 
-## The change
+## The change, in two stages
 
-`R` is one resolution cell on each axis, derived from the node's own capture
-config (`MEASUREMENT_NOISE_CELLS` in `config.py`):
+### 5 October: one resolution cell
 
-- delay: `(c / fs)^2`, 150 m at 2 MHz;
-- Doppler: `(1 / cpi)^2` in Hz, 2 Hz at a 0.5 s CPI, converted to range rate at
-  the node's own wavelength.
+`R` was set to one resolution cell on each axis, `(c / fs)^2` in delay (150 m at
+2 MHz) and `(1 / cpi)^2` in Doppler (2 Hz at a 0.5 s CPI), with the SNR scaling
+unchanged. Innovation recordings from jn1 (17 Sep) and fairforest B (22-23 Sep)
+both said `R` was 25-33x too large in delay, but disagreed on a measured value by
+3.7x, so one cell was the conservative bound that needed no fitting. That is
+what removed the jumps in the replays below.
 
-The SNR scaling is unchanged: it is relative to the 10 dB reference and matches
-the estimator's variance going as 1/SNR.
+### 11 October: measured on three nodes
+
+All three nodes recorded innovations under the same tracker code for 26 hours
+(10-11 October), and the noise was measured from those recordings. The dataset,
+scripts and outputs are in the git-ignored `data/calibration/`.
+
+**Method.** The calibration tool's approach, extrapolating innovation scatter
+back to zero prediction interval, cannot separate `R` from `Q` at 2 frames per
+second: no interval is shorter than one frame, and scatter already rises by half
+between 0.5 s and 1 s, so the intercept moved from 2 m to 18 m with the choice of
+tracks. Measurement noise was instead taken from smoother residuals: a quadratic
+through seven consecutive detections of the same track, centred on each one, so
+the motion is absorbed by the fit and what remains is the measurement. Tracks were
+either ADS-B-labelled or long confirmed tracks whose delay moves as their own
+Doppler says; both filters gave the same answer.
+
+| Node | Band | Delay noise | Doppler noise |
+| --- | --- | --- | --- |
+| jonathan-node-1 | VHF 213 MHz | 14.7-15.7 m (0.10 cells) | 0.28-0.32 Hz = 0.40-0.44 m/s (0.15 bins) |
+| fairforest B | VHF 213 MHz | 12.1-12.2 m (0.08 cells) | 0.29-0.30 Hz = 0.41-0.42 m/s (0.15 bins) |
+| jonathan-node-2 | UHF 545 MHz | 14.8-15.9 m (0.10 cells) | 0.63-0.69 Hz = 0.34-0.38 m/s (0.33 bins) |
+
+By SNR, in 2 dB bands across all three nodes, delay variance falls as
+`SNR^-0.40`, giving 17.5 m at 10 dB; the old model's `SNR^-1` fell 2.5x too
+steeply. Doppler noise barely moves with SNR (fitted exponent 0.06), staying at
+about 0.4 m/s from 8 dB to 40 dB within 1.5x on every node.
+
+**What the tracker now uses** (`config.py`):
+
+```
+delay      sigma = 0.12 cells at 10 dB (17.5 m at 2 MHz), variance scaled by max(SNR/10 dB, 0.1)^-0.4
+range rate sigma = 0.4 m/s, not scaled by SNR
+```
+
+Delay noise stays in cells because it held at a tenth of a cell on every node.
+Doppler noise is a range rate, not bins, because it held at about 0.4 m/s on both
+bands while differing 2.2x in bins. That conclusion rests on a single UHF node.
+One SNR-scaling function, `kalman.delay_noise_scale`, serves both the update and
+the association gate.
+
+Against the one-cell bound this is about 10x tighter in delay and 7x (VHF) or 3x
+(UHF) tighter in Doppler.
+
+### Process noise
 
 `Q` gains a range-rate random walk, `process_noise.range_rate` = 1e-5 km^2/s^3,
 on top of the existing white jerk. The plan measured model error growing as
@@ -42,27 +86,14 @@ short intervals loses aircraft where Doppler slews hard. This term is a property
 of aircraft motion in range rate, not of the radar, so it is the same at every
 site.
 
-The ADS-B start covariance is now `(position / 1000)^2` km^2. It had been
-`position / 1000`, a standard deviation used as a variance: 0.1 km^2 for the
-100 m default, which was tighter than the old 1 km^2 radar start but would now
-be looser than the new one-cell radar start.
+### ADS-B no longer changes where a track starts
 
-## Why one cell, rather than a measured k
-
-The plan asks for `R = (k * cell)^2` with `k` measured once and shown to agree
-across sites. `retina_tracker.calibrate` on two VHF nodes' innovations:
-
-| Node | Delay k (cells) | Doppler k (cells) | Claimed vs real delay scatter | Model error growth (delay, Doppler) |
-| --- | --- | --- | --- | --- |
-| jonathan-node-1, 17 Sep, 30k records | 0.044 | 0.022 | 25x too large | L^1.25, L^1.90 |
-| fairforest B, 22-23 Sep, 206k records | 0.029 | 0.083 | 33x too large | L^0.95, L^1.25 |
-
-Both say `R` was far too large, by similar factors. They do not agree on a `k`:
-the four values span 3.7x, and the growth exponents disagree too. By the tool's
-own rule that is not shippable as a measured constant. One cell is above every
-measured value, so it is conservative everywhere, and it needs no fitting: a
-detection is reported to within its resolution cell. A measured `k` can replace
-it once one value holds across sites, and nothing else needs to change.
+A track whose first detection carried ADS-B used to start with the
+`adsb.initial_covariance.position` uncertainty, 100 m. Its state always came from
+the radar detection, never the ADS-B position, so that uncertainty had no basis,
+and against the measured 18 m it would make labelled tracks start less certain
+than unlabelled ones. It is removed, along with the setting; ADS-B labels a track
+and earns it association priority, nothing more.
 
 ## Measured effect
 

@@ -108,7 +108,6 @@ def load_config(config_path=None):
             "enabled": False,
             "priority": True,
             "reference_location": None,
-            "initial_covariance": {"position": 100.0, "velocity": 5.0},
         },
         "radar": {
             "blah2_config": None,
@@ -213,19 +212,23 @@ def OUTPUT_BACKUP_COUNT():
     return _get_param("output", "backup_count", 1)
 
 
-# Measurement noise, in resolution cells, at the 10 dB reference SNR. One cell
-# is conservative: innovations measured at two nodes put the real scatter well
-# under it, but not at one value both agree on. See docs/measurement-noise.md.
-MEASUREMENT_NOISE_CELLS = 1.0
+# Measurement noise, measured on jn1, fairforest B and jn2 (UHF) from smoother
+# residuals of ADS-B and physics-checked tracks. Delay noise is 0.12 cells at
+# 10 dB and falls as SNR^-0.4 in variance; Doppler noise is 0.4 m/s of range
+# rate on both bands and barely depends on SNR, so it is not in bins. See
+# docs/measurement-noise.md.
+MEASUREMENT_NOISE_DELAY_CELLS = 0.12
+MEASUREMENT_NOISE_RANGE_RATE_KM_S = 0.0004
+MEASUREMENT_NOISE_DELAY_SNR_EXPONENT = 0.4
 INITIAL_RANGE_ACCEL_VARIANCE = 1e-4
 
 
 def MEASUREMENT_NOISE_DELAY_KM2():
-    return (MEASUREMENT_NOISE_CELLS * DELAY_CELL_KM()) ** 2
+    return (MEASUREMENT_NOISE_DELAY_CELLS * DELAY_CELL_KM()) ** 2
 
 
-def MEASUREMENT_NOISE_DOPPLER_HZ2():
-    return (MEASUREMENT_NOISE_CELLS * DOPPLER_BIN_HZ()) ** 2
+def MEASUREMENT_NOISE_RANGE_RATE_KM2():
+    return MEASUREMENT_NOISE_RANGE_RATE_KM_S**2
 
 
 def CENTER_FREQUENCY_HZ():

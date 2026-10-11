@@ -31,7 +31,7 @@ from .config import (
     ordered_bounds,
 )
 from .interference import DopplerOccupancy
-from .kalman import KalmanFilter, doppler_to_range_rate
+from .kalman import KalmanFilter, delay_noise_scale, doppler_to_range_rate
 from .track import Track, TrackState
 
 MERGE_WINDOW_MS = 5000
@@ -553,11 +553,8 @@ class Tracker:
         det_z = np.array([[d["delay"], doppler_to_range_rate(d["doppler"])] for d in detections])
         det_snr = np.array([d.get("snr", 10.0) for d in detections])
         snr_weights = 20.0 / np.maximum(det_snr, 5.0)
-        # Per-detection measurement-noise scale — the same model update()
-        # applies to R.  Gating used the unscaled R while update scaled it, so
-        # a high-SNR detection was admitted through a looser covariance than
-        # the one that then weighted it.
-        noise_scale = 1.0 / np.maximum(10.0 ** (det_snr / 10.0) / 10.0, 0.1)
+        # Per-detection delay-noise scale, the same function update() applies.
+        noise_scale = delay_noise_scale(det_snr)
 
         base_gate = GATE_THRESHOLD()
         adsb_priority = self.config.get("adsb", {}).get("priority")
@@ -570,7 +567,7 @@ class Tracker:
             r_delay = track.kf.R[0, 0]
             r_doppler = track.kf.R[1, 1]
             a = B[0, 0] + r_delay * noise_scale  # (n_dets,)
-            d = B[1, 1] + r_doppler * noise_scale  # (n_dets,)
+            d = np.full_like(a, B[1, 1] + r_doppler)  # (n_dets,)
             b = B[0, 1]
             c = B[1, 0]
             det_S = a * d - b * c

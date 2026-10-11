@@ -96,9 +96,6 @@ adsb:
     latitude: 37.7644         # San Francisco (150 Mississippi)
     longitude: -122.3954
     altitude: 23              # meters above WGS84 ellipsoid
-  initial_covariance:
-    position: 100.0           # Position uncertainty (meters)
-    velocity: 5.0             # Velocity uncertainty (m/s)
 
 # Streaming JSONL output (-s flag)
 # Consumers tail the live file only, so each rotation drops whatever they had not

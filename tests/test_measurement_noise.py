@@ -1,10 +1,10 @@
-"""Tests for measurement noise sized from the resolution cell.
+"""Tests for measurement noise as measured on three nodes.
 
 R was a fixed 1 km and 2.24 Hz of standard deviation, about 7 delay cells, and
-the SNR scaling took it past 2 km at the detection floor. Measured scatter is a
-small fraction of a cell, so every gate was kilometres wide and a confirmed
-track would take a stray detection kilometres off its path and come straight
-back. See docs/measurement-noise.md.
+the SNR scaling took it past 2 km at the detection floor, so every gate was
+kilometres wide. Measured from smoother residuals on jn1, fairforest B and jn2,
+delay noise is 0.12 cells at 10 dB falling as SNR^-0.4 in variance, and Doppler
+noise is 0.4 m/s of range rate on both bands. See docs/measurement-noise.md.
 """
 
 import numpy as np
@@ -12,12 +12,11 @@ import pytest
 
 from retina_tracker.config import (
     MEASUREMENT_NOISE_DELAY_KM2,
-    MEASUREMENT_NOISE_DOPPLER_HZ2,
-    WAVELENGTH_KM,
+    MEASUREMENT_NOISE_RANGE_RATE_KM2,
     load_config,
     set_config,
 )
-from retina_tracker.kalman import KalmanFilter, doppler_to_range_rate
+from retina_tracker.kalman import KalmanFilter, delay_noise_scale, doppler_to_range_rate
 from retina_tracker.track import Track, TrackState
 from retina_tracker.tracker import Tracker
 
@@ -31,20 +30,32 @@ def use(**radar):
     return config
 
 
-def test_noise_is_one_resolution_cell_of_the_nodes_own_capture():
-    use(sample_rate=2000000, cpi=0.5)
-    assert MEASUREMENT_NOISE_DELAY_KM2() == pytest.approx(0.149896**2, rel=1e-4)
-    assert MEASUREMENT_NOISE_DOPPLER_HZ2() == pytest.approx(2.0**2)
-
-    use(sample_rate=4000000, cpi=1.0)
-    assert MEASUREMENT_NOISE_DELAY_KM2() == pytest.approx(0.074948**2, rel=1e-4)
-    assert MEASUREMENT_NOISE_DOPPLER_HZ2() == pytest.approx(1.0**2)
+def test_delay_noise_is_a_fixed_share_of_the_nodes_own_delay_cell():
+    use(sample_rate=2000000)
+    assert MEASUREMENT_NOISE_DELAY_KM2() == pytest.approx((0.12 * 0.149896) ** 2, rel=1e-4)
+    use(sample_rate=4000000)
+    assert MEASUREMENT_NOISE_DELAY_KM2() == pytest.approx((0.12 * 0.074948) ** 2, rel=1e-4)
 
 
-def test_doppler_noise_converts_to_range_rate_at_the_nodes_carrier():
-    use(center_frequency=545000000)
-    r = KalmanFilter().R
-    assert r[1, 1] == pytest.approx((WAVELENGTH_KM() * 2.0) ** 2)
+def test_doppler_noise_is_the_same_range_rate_on_every_band_and_cpi():
+    for fc, cpi in ((213000000, 0.5), (545000000, 0.5), (213000000, 1.0)):
+        use(center_frequency=fc, cpi=cpi)
+        assert KalmanFilter().R[1, 1] == pytest.approx(MEASUREMENT_NOISE_RANGE_RATE_KM2())
+        assert MEASUREMENT_NOISE_RANGE_RATE_KM2() == pytest.approx(0.0004**2)
+
+
+def test_only_delay_noise_falls_with_snr():
+    use()
+    kf = KalmanFilter()
+    at_10, at_20 = kf.measurement_noise(10.0), kf.measurement_noise(20.0)
+    assert at_20[0, 0] / at_10[0, 0] == pytest.approx(10.0**-0.4)
+    assert at_20[1, 1] == at_10[1, 1]
+    assert kf.measurement_noise(None)[0, 0] == pytest.approx(at_10[0, 0])
+
+
+def test_delay_noise_stops_growing_below_0_db():
+    assert delay_noise_scale(-10.0) == pytest.approx(delay_noise_scale(0.0))
+    assert np.allclose(delay_noise_scale(np.array([10.0, 20.0])), [1.0, 10.0**-0.4])
 
 
 def test_process_noise_carries_a_range_rate_random_walk():
@@ -80,12 +91,11 @@ def test_a_confirmed_track_refuses_a_stray_detection_kilometres_off_its_path():
     assert track.n_missed == 0
 
 
-def test_an_adsb_start_is_tighter_than_a_radar_only_one():
+def test_an_adsb_label_does_not_change_where_a_track_starts():
     config = use()
     config["adsb"].update({"enabled": True, "reference_location": {"latitude": 0.0, "longitude": 0.0, "altitude": 0}})
     adsb = {"hex": "abc123", "lat": 37.0, "lon": -122.0, "alt_baro": 9000, "gs": 250, "track": 90}
     radar_only = Track({"delay": 20.0, "doppler": -80.0, "snr": 12.0}, 0, KalmanFilter(), config=config)
     labelled = Track({"delay": 20.0, "doppler": -80.0, "snr": 12.0, "adsb": adsb}, 0, KalmanFilter(), config=config)
-    assert labelled.adsb_initialized
-    assert labelled.covariance[0, 0] == pytest.approx(0.1**2)
-    assert labelled.covariance[0, 0] < radar_only.covariance[0, 0]
+    assert labelled.adsb_initialized and labelled.adsb_hex == "abc123"
+    assert np.array_equal(labelled.covariance, radar_only.covariance)

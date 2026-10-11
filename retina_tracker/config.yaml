@@ -54,9 +54,6 @@ adsb:
     latitude: 33.939182       # Atlanta RX (Net13)
     longitude: -84.651910
     altitude: 290             # meters above WGS84 ellipsoid
-  initial_covariance:
-    position: 100.0           # Position uncertainty (meters)
-    velocity: 5.0             # Velocity uncertainty (m/s)
 
 # Paths (relative to repo root)
 paths:

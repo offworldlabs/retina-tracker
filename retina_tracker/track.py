@@ -13,7 +13,7 @@ from .config import (
     INITIAL_RANGE_ACCEL_VARIANCE,
     M_THRESHOLD,
     MEASUREMENT_NOISE_DELAY_KM2,
-    MEASUREMENT_NOISE_DOPPLER_HZ2,
+    MEASUREMENT_NOISE_RANGE_RATE_KM2,
     N_COAST,
     N_DELETE,
     N_WINDOW,
@@ -79,7 +79,7 @@ class Track:
 
         adsb_config = config.get("adsb", {}) if config else {}
         if detection.get("adsb") and adsb_config.get("enabled") and adsb_config.get("reference_location"):
-            self._init_from_adsb(detection, adsb_config)
+            self._init_from_adsb(detection)
         else:
             self._init_from_delay_doppler(detection)
 
@@ -155,7 +155,7 @@ class Track:
 
         return True
 
-    def _init_from_adsb(self, detection, adsb_config):
+    def _init_from_adsb(self, detection):
         adsb = detection["adsb"]
 
         if not self._validate_adsb_data(adsb):
@@ -166,15 +166,13 @@ class Track:
         self.adsb_initialized = True
 
         self._init_from_delay_doppler(detection)
-        self.covariance[0, 0] = (adsb_config["initial_covariance"]["position"] / 1000.0) ** 2
 
     def _init_from_delay_doppler(self, detection):
-        wavelength = WAVELENGTH_KM()
         self.state = np.array([detection["delay"], doppler_to_range_rate(detection["doppler"]), 0.0])
         self.covariance = np.diag(
             [
                 MEASUREMENT_NOISE_DELAY_KM2(),
-                wavelength * wavelength * MEASUREMENT_NOISE_DOPPLER_HZ2(),
+                MEASUREMENT_NOISE_RANGE_RATE_KM2(),
                 INITIAL_RANGE_ACCEL_VARIANCE,
             ]
         )
