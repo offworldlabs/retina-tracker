@@ -11,8 +11,10 @@ import json
 import numpy as np
 import pytest
 
+from retina_tracker.config import load_config, set_config
 from retina_tracker.kalman import KalmanFilter, Residual, doppler_to_range_rate
 from retina_tracker.output import InnovationWriter
+from retina_tracker.track import Track
 from retina_tracker.tracker import Tracker
 
 BASE_TS = 1718747745000
@@ -95,12 +97,14 @@ class TestRecordsReachTheFile:
             "doppler",
             "interfering",
             "n_missed",
+            "interval",
             "q_scale",
             "innovation",
             "s_diag",
             "nis",
         }
         assert record["dt"] == pytest.approx(0.5)
+        assert record["interval"] == pytest.approx(0.5)
         assert record["snr"] == pytest.approx(16.0)
         assert record["s_diag"][0] > 0
 
@@ -171,6 +175,21 @@ class TestTheCoastingHistoryIsNotLost:
 
     def test_an_uninterrupted_update_still_records_none(self, tmp_path):
         assert self._coasted(tmp_path, gap=0)[-1]["n_missed"] == 0
+
+    def test_the_interval_is_the_time_since_the_previous_update(self, tmp_path):
+        assert self._coasted(tmp_path, gap=2)[-1]["interval"] == pytest.approx(1.5)
+
+
+class TestTheIntervalCountsHeldFrames:
+    def test_a_gap_spent_held_in_the_blank_is_still_counted(self):
+        """A held track's misses do not count as misses, so n_missed reads 0
+        after a crossing however long it took. The interval must not."""
+        set_config(load_config(None))
+        track = Track({"delay": 20.0, "doppler": 20.0, "snr": 15.0}, 0, KalmanFilter())
+        track.update({"delay": 19.99, "doppler": 19.0, "snr": 15.0}, 500)
+        track.update({"delay": 19.95, "doppler": -20.0, "snr": 15.0}, 30500)
+        assert track.last_n_missed == 0
+        assert track.last_interval_s == pytest.approx(30.0)
 
 
 class TestOffByDefault:

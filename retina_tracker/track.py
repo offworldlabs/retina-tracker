@@ -113,6 +113,7 @@ class Track:
         self.last_residual = None
         self.last_q_scale = 1.0
         self.last_n_missed = 0
+        self.last_interval_s = None
         self.n_shadowed = 1 if detection.get("shadowed") else 0
         self.n_interfering = 1 if detection.get("interfering") else 0
 
@@ -241,6 +242,9 @@ class Track:
         # innovation was measured against, and by the end of this method it is
         # gone.
         self.last_n_missed = self.n_missed
+        # The true prediction interval. n_missed cannot give it: frames held
+        # through the zero-Doppler blank are not counted as misses.
+        self.last_interval_s = (timestamp - self.last_update_ms) / 1000.0
 
         # Capture ADS-B hex on first association that carries one.  Tracks
         # initialised from clutter miss this in __init__; this back-fills it.

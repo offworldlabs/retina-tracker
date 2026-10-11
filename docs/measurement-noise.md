@@ -39,7 +39,8 @@ All three nodes recorded innovations under the same tracker code for 26 hours
 (10-11 October), and the noise was measured from those recordings. The dataset,
 scripts and outputs are in the git-ignored `data/calibration/`.
 
-**Method.** The calibration tool's approach, extrapolating innovation scatter
+**Method.** The former calibration tool's approach (`retina_tracker.calibrate`, since
+removed), extrapolating innovation scatter
 back to zero prediction interval, cannot separate `R` from `Q` at 2 frames per
 second: no interval is shorter than one frame, and scatter already rises by half
 between 0.5 s and 1 s, so the intercept moved from 2 m to 18 m with the choice of
@@ -142,6 +143,36 @@ retina-gui draws it as a layer. A config that still sets `min_snr` is loaded and
 ignored. Follow-ups outside this repo: retina-gui's config editor still offers
 the field and describes it as discarding detections, and retina-node's
 `default.yml` still sets it.
+
+### Rerunning the calibration
+
+Calibration is an offline job, run once per change of hardware or band rather than
+per node. The old `retina_tracker.calibrate` was removed because its method gives
+confident wrong answers at 2 frames per second. To repeat the 11 October fit:
+
+1. **Record.** Start the tracker with `--innovations <file>`: one line per Kalman
+   update with the prediction, the measurement and its SNR. Record a full day,
+   with daytime traffic, on every node being calibrated, keeping each node's
+   events file for the ADS-B labels. The writer truncates its file when the
+   tracker restarts, so copy it off regularly.
+2. **Select aircraft.** Keep records from ADS-B-labelled tracks, joining labels on
+   `track_id` only from events after the tracker started (ids restart every run),
+   and separately from long confirmed tracks whose delay moves as their Doppler
+   says. Drop records the occupancy map marked `interfering`.
+3. **Measure `R` from smoother residuals.** For each run of seven consecutive
+   detections of one track, fit a quadratic in time to delay and to Doppler and
+   take the centre detection's residual. Robust sigma (1.4826 x median absolute
+   deviation), inflated by `sqrt(7 / 4)` for the fit's three parameters, in SNR
+   bands to fit the SNR exponent.
+4. **Fit `Q` by replay.** With `R` fixed, run each aircraft track's own detections
+   through the filter offline over a grid of process noise, and keep the `Q` whose
+   median NIS sits at 2 ln 2 = 1.39 across prediction intervals. Use the record's
+   `interval`, the true time since that track's previous update; `dt` and
+   `n_missed` miss frames held through the zero-Doppler blank.
+5. **Validate by replay** of every node's recorded history before shipping.
+
+The scripts used on 11 October are kept with the dataset in the git-ignored
+`data/calibration/fit/`, so they exist only on the machine that ran them.
 
 ## Measured effect
 
