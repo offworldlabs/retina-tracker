@@ -83,7 +83,6 @@ def load_config(config_path=None):
             "n_window": 6,
             "n_delete": 10,
             "n_coast": 3,
-            "min_snr": 4.0,
             "gate_threshold": 9.0,
             "detection_window": 20,
         },
@@ -197,10 +196,6 @@ def N_COAST():
 
 def GATE_THRESHOLD():
     return _get_param("tracker", "gate_threshold", 9.0)
-
-
-def MIN_SNR():
-    return _get_param("tracker", "min_snr", 4.0)
 
 
 def OUTPUT_MAX_BYTES():

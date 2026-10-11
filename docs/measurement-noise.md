@@ -124,6 +124,25 @@ and against the measured 18 m it would make labelled tracks start less certain
 than unlabelled ones. It is removed, along with the setting; ADS-B labels a track
 and earns it association priority, nothing more.
 
+### No SNR threshold
+
+`tracker.min_snr` is removed. It set detections below a per-node SNR aside before
+the tracker saw them, and was set by hand per node: 4 dB on jn1 and jn2, 7 dB on
+fairforest B. That is a per-site tuning, and with measured noise the gate and the
+physics checks are what reject noise, so every detection with a finite SNR is now
+tracked. Low-SNR detections are not trusted blindly: their delay noise is larger,
+by the measured `SNR^-0.4` scaling, so the gate admits them less readily.
+
+A detection with a non-finite SNR is rejected and counted in
+`n_detections_rejected`, because SNR now scales the measurement noise and a NaN
+would reach the covariance.
+
+The `below_snr` detection class stays on the wire, always empty, because
+retina-gui draws it as a layer. A config that still sets `min_snr` is loaded and
+ignored. Follow-ups outside this repo: retina-gui's config editor still offers
+the field and describes it as discarding detections, and retina-node's
+`default.yml` still sets it.
+
 ## Measured effect
 
 Each node's own tracker history (every detection it received, classified) was

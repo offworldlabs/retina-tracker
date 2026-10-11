@@ -56,7 +56,6 @@ tracker:
   m_threshold: 4          # Associations needed to confirm track
   n_window: 6             # Window for M-of-N logic
   n_delete: 10            # Missed frames before deletion
-  min_snr: 7.0            # Detection threshold (dB)
   gate_threshold: 9.0     # Chi-squared gate (99% confidence)
   detection_window: 20    # Rolling detection window size
 

@@ -140,22 +140,13 @@ class TestRejectingWhatTheNodeCannotHaveSeen:
         assert tracker.n_detections_rejected == 2
         assert not tracker.tracks
 
-    def test_a_nan_snr_is_still_recorded_rather_than_rejected(self):
-        """It has a real delay and Doppler. The SNR partition routes it to
-        below_snr on purpose, which keeps it in the record."""
-
-        class Sink:
-            def __init__(self):
-                self.below = 0
-
-            def write_detections(self, timestamp, associated, unassociated, below_snr):
-                self.below += len(below_snr)
-
+    def test_a_nan_snr_is_rejected(self):
+        """There is no SNR threshold to route it aside any more, and SNR
+        scales the measurement noise, so it cannot reach the filter."""
         set_config(span_config())
-        sink = Sink()
-        tracker = run(Tracker(config=None, detection_sink=sink), [det(20.0, 30.0, snr=float("nan"))], n=3)
-        assert tracker.n_detections_rejected == 0
-        assert sink.below >= 1
+        tracker = run(Tracker(config=None), [det(20.0, 30.0, snr=float("nan"))], n=3)
+        assert tracker.n_detections_rejected == 3
+        assert not tracker.tracks
 
     def test_a_measurement_that_is_not_a_number_is_rejected(self):
         set_config(span_config())

@@ -20,7 +20,6 @@ from .config import (
     INTERFERENCE_ENABLED,
     INTERFERENCE_SUPPRESS,
     M_THRESHOLD,
-    MIN_SNR,
     SHADOW_DELAY_KM,
     SHADOW_ENABLED,
     SHADOW_SNR_MARGIN_DB,
@@ -174,10 +173,9 @@ class Tracker:
         same case, and would otherwise reach the filter and put a NaN through
         a covariance rather than being rejected.
 
-        SNR is only type-checked, deliberately. A NaN SNR still has a real
-        delay and Doppler, and the partition below already routes it to
-        below_snr on purpose, which keeps it in the record rather than
-        vanishing it here.
+        A non-finite SNR is rejected too. There is no SNR threshold any more,
+        so such a detection would otherwise reach the filter, where SNR scales
+        the measurement noise.
 
         Each bound is widened by one resolution cell, because the centroider
         interpolates between bin centres and a real peak in the outermost bin
@@ -203,7 +201,7 @@ class Tracker:
             if not all(isinstance(v, numbers.Real) and math.isfinite(v) for v in (delay, doppler)):
                 self.n_detections_rejected += 1
                 continue
-            if not isinstance(snr, numbers.Real):
+            if not isinstance(snr, numbers.Real) or not math.isfinite(snr):
                 self.n_detections_rejected += 1
                 continue
             if doppler_min is not None and doppler < doppler_min - doppler_slack:
@@ -259,20 +257,9 @@ class Tracker:
         else:
             dt = 0.5
 
-        # A partition, not a filter. Everything below the gate used to be
-        # dropped here without trace, which is why nothing downstream could
-        # tell "the tracker rejected what it saw" from "there was nothing to
-        # see". A single loop rather than two comprehensions so that every
-        # detection lands in exactly one bucket even when snr is NaN, which
-        # fails both comparisons.
+        # No SNR threshold: noise is rejected by the gate and the physics, not
+        # by a per-site setting. docs/measurement-noise.md.
         detections = self._reject_impossible(detections)
-
-        min_snr = MIN_SNR()
-        below_snr = []
-        kept = []
-        for d in detections:
-            (kept if d["snr"] >= min_snr else below_snr).append(d)
-        detections = kept
 
         self._mark_shadows(detections)
         self._mark_interference(detections, timestamp)
@@ -431,7 +418,7 @@ class Tracker:
         # After deletions and promotions, so this frame's own tracks may
         # already have settled.
         if self.detection_sink is not None:
-            self._classify_frame(timestamp, landed_in, detections, below_snr, suppressed)
+            self._classify_frame(timestamp, landed_in, detections, suppressed)
 
         resync = self.n_backwards >= BACKWARDS_RUN_BEFORE_RESYNC
         if self.last_timestamp is None or timestamp > self.last_timestamp or resync:
@@ -479,7 +466,7 @@ class Tracker:
             return next(reversed(self.frame_records.values()), None)
         return self.frame_records.get(timestamp)
 
-    def _classify_frame(self, timestamp, landed_in, detections, below_snr, suppressed):
+    def _classify_frame(self, timestamp, landed_in, detections, suppressed):
         """Queue one frame's detections for classification, then drain.
 
         Splitting queue from drain is what keeps the stream in frame order:
@@ -496,7 +483,6 @@ class Tracker:
                 "timestamp": timestamp,
                 "frame": self.frame_count,
                 "pairs": [(det, landed_in[i]) for i, det in enumerate(detections) if i in landed_in],
-                "below_snr": below_snr,
                 "suppressed": suppressed,
             }
         )
@@ -538,7 +524,9 @@ class Tracker:
                 (associated if track.ever_confirmed else unassociated).append(det)
 
             self._pending_classification.popleft()
-            self.detection_sink.write_detections(entry["timestamp"], associated, unassociated, entry["below_snr"])
+            # below_snr is always empty now there is no threshold; it stays on
+            # the wire because retina-gui draws it as a layer.
+            self.detection_sink.write_detections(entry["timestamp"], associated, unassociated, [])
 
     def _associate(self, detections):
         if not self.tracks or not detections:
