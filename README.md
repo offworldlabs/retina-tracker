@@ -82,7 +82,7 @@ When enabled, ADS-B matches attached to detections by blah2-api are used to:
 1. **Label tracks**: a track carries the ICAO hex of the first valid match it takes, in its own `adsb_hex` field. Track IDs are sequential counters, never derived from the hex.
 2. **Priority association**: ADS-B tracks get a 20% cost reduction during data association.
 
-A track's state always starts from the radar detection itself, whose measured noise (about 18 m in delay at 10 dB, docs/measurement-noise.md) is tighter than an ADS-B position.
+A track's state always starts from the radar detection itself, whose measurement noise (about 37 m in delay at 10 dB, docs/measurement-noise.md) is tighter than an ADS-B position.
 
 **Backward Compatibility:**
 - ADS-B disabled by default (`enabled: false`)

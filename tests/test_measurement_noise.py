@@ -3,8 +3,10 @@
 R was a fixed 1 km and 2.24 Hz of standard deviation, about 7 delay cells, and
 the SNR scaling took it past 2 km at the detection floor, so every gate was
 kilometres wide. Measured from smoother residuals on jn1, fairforest B and jn2,
-delay noise is 0.12 cells at 10 dB falling as SNR^-0.4 in variance, and Doppler
-noise is 0.4 m/s of range rate on both bands. See docs/measurement-noise.md.
+delay noise is 0.12 cells wide at 10 dB falling as SNR^-0.4 in variance, and
+Doppler noise is 0.4 m/s of range rate on both bands. The noise has heavy tails,
+so R is twice that width, which makes the gate admit 98.9% of real aircraft
+measurements as it promises. See docs/measurement-noise.md.
 """
 
 import numpy as np
@@ -32,16 +34,16 @@ def use(**radar):
 
 def test_delay_noise_is_a_fixed_share_of_the_nodes_own_delay_cell():
     use(sample_rate=2000000)
-    assert MEASUREMENT_NOISE_DELAY_KM2() == pytest.approx((0.12 * 0.149896) ** 2, rel=1e-4)
+    assert MEASUREMENT_NOISE_DELAY_KM2() == pytest.approx((0.25 * 0.149896) ** 2, rel=1e-4)
     use(sample_rate=4000000)
-    assert MEASUREMENT_NOISE_DELAY_KM2() == pytest.approx((0.12 * 0.074948) ** 2, rel=1e-4)
+    assert MEASUREMENT_NOISE_DELAY_KM2() == pytest.approx((0.25 * 0.074948) ** 2, rel=1e-4)
 
 
 def test_doppler_noise_is_the_same_range_rate_on_every_band_and_cpi():
     for fc, cpi in ((213000000, 0.5), (545000000, 0.5), (213000000, 1.0)):
         use(center_frequency=fc, cpi=cpi)
         assert KalmanFilter().R[1, 1] == pytest.approx(MEASUREMENT_NOISE_RANGE_RATE_KM2())
-        assert MEASUREMENT_NOISE_RANGE_RATE_KM2() == pytest.approx(0.0004**2)
+        assert MEASUREMENT_NOISE_RANGE_RATE_KM2() == pytest.approx(0.0008**2)
 
 
 def test_only_delay_noise_falls_with_snr():

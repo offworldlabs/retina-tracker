@@ -207,12 +207,14 @@ def OUTPUT_BACKUP_COUNT():
 
 
 # Measurement noise, measured on jn1, fairforest B and jn2 (UHF) from smoother
-# residuals of ADS-B and physics-checked tracks. Delay noise is 0.12 cells at
-# 10 dB and falls as SNR^-0.4 in variance; Doppler noise is 0.4 m/s of range
-# rate on both bands and barely depends on SNR, so it is not in bins. See
-# docs/measurement-noise.md.
-MEASUREMENT_NOISE_DELAY_CELLS = 0.12
-MEASUREMENT_NOISE_RANGE_RATE_KM_S = 0.0004
+# residuals of ADS-B and physics-checked tracks. The typical width is 0.12 cells
+# of delay at 10 dB, falling as SNR^-0.4 in variance, and 0.4 m/s of range rate
+# on both bands, barely moving with SNR, so it is not in bins. The noise has
+# heavy tails, so at that width the gate refused 8-12% of real aircraft
+# measurements; these are twice it, the factor every node needed for the gate
+# to admit 98.9% as it promises. See docs/measurement-noise.md.
+MEASUREMENT_NOISE_DELAY_CELLS = 0.25
+MEASUREMENT_NOISE_RANGE_RATE_KM_S = 0.0008
 MEASUREMENT_NOISE_DELAY_SNR_EXPONENT = 0.4
 INITIAL_RANGE_ACCEL_VARIANCE = 1e-4
 

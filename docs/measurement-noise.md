@@ -61,21 +61,46 @@ By SNR, in 2 dB bands across all three nodes, delay variance falls as
 steeply. Doppler noise barely moves with SNR (fitted exponent 0.06), staying at
 about 0.4 m/s from 8 dB to 40 dB within 1.5x on every node.
 
+**Heavy tails, and sizing `R` for the gate.** The widths above are robust
+estimates (median absolute deviation), which describe the typical detection and
+ignore the tails. Real radar noise has heavy tails. Used directly as `R`, the
+chi-squared gate of 9, which should admit 98.9% of genuine measurements, refused
+far more:
+
+| Genuine aircraft measurements outside the gate | Delay beyond 3 sigma | Range rate beyond 3 sigma | Joint gate |
+| --- | --- | --- | --- |
+| Gaussian noise | 0.3% | 0.3% | 1.1% |
+| jn1 | 3.1% | 4.0% | 7.9% |
+| fairforest B | 4.2% | 2.4% | 7.7% |
+| jn2 | 4.0% | 7.2% | 12.2% |
+
+Replayed, that cost 5-7% of ADS-B-labelled detections against the deployed code,
+and raising `Q` recovered little of it, which is how the cause was pinned to `R`.
+The scale on both axes that makes the gate admit 98.9% of real measurements was
+2.00x at jn1, 2.05x at fairforest B and 2.10x at jn2: the same at every node and
+on both bands, so it is a property of blah2's measurements, not of a site.
+
 **What the tracker now uses** (`config.py`):
 
 ```
-delay      sigma = 0.12 cells at 10 dB (17.5 m at 2 MHz), variance scaled by max(SNR/10 dB, 0.1)^-0.4
-range rate sigma = 0.4 m/s, not scaled by SNR
+delay      sigma = 0.25 cells at 10 dB (37 m at 2 MHz), variance scaled by max(SNR/10 dB, 0.1)^-0.4
+range rate sigma = 0.8 m/s, not scaled by SNR
 ```
 
-Delay noise stays in cells because it held at a tenth of a cell on every node.
-Doppler noise is a range rate, not bins, because it held at about 0.4 m/s on both
-bands while differing 2.2x in bins. That conclusion rests on a single UHF node.
-One SNR-scaling function, `kalman.delay_noise_scale`, serves both the update and
-the association gate.
+That is the robust width, 0.12 cells and 0.4 m/s, times the coverage factor of
+two. Delay noise stays in cells because it held at a tenth of a cell on every
+node. Doppler noise is a range rate, not bins, because it held at about 0.4 m/s
+on both bands while differing 2.2x in bins; that conclusion rests on a single UHF
+node. One SNR-scaling function, `kalman.delay_noise_scale`, serves both the
+update and the association gate.
 
-Against the one-cell bound this is about 10x tighter in delay and 7x (VHF) or 3x
-(UHF) tighter in Doppler.
+Against the one-cell bound this is about 4x tighter in delay and 3.5x (VHF) or
+1.4x (UHF) tighter in Doppler.
+
+The cost of sizing `R` for the gate is that the filter weights measurements as if
+they were noisier than the typical one: its median NIS sits at 0.35-0.75 rather
+than the matched 1.39. A filter that models the heavy tails directly could have
+both, and is a larger change for later.
 
 ### Process noise
 
@@ -103,11 +128,13 @@ Three conclusions:
 - **The range-rate walk is not supported once `R` is right.** Every node's best
   fit had it at zero. On 5 October it was compensating for an `R` ten times too
   large, so it is removed.
-- **The size of `Q` depends on the site**, 10x between close-traffic jn1 and
-  far-traffic jn2, as expected of a quantity dominated by geometry. The floor is
-  set at 1e-6 and the adaptive scaling, which widens `Q` by however far the
-  filter's own NIS says the motion model is failing, carries it towards 1e-5 at
-  close-traffic sites. Its ceiling of 25x covers that. Nothing is set per site.
+- **The fitted size of `Q` depends on the site**, 10x between close-traffic jn1
+  and far-traffic jn2, as expected of a quantity dominated by geometry. The floor
+  is set at 1e-6. The adaptive scaling was expected to widen it towards 1e-5 at
+  close-traffic sites, but in replay it barely engaged with the robust-width `R`
+  (90th percentile 1.3-1.6x) and not at all with the final `R` (1.0x). It did not
+  need to: replayed with the floor at 3e-6 or 1e-5, every node recovered little
+  recall and got more jumps. Nothing is set per site.
 - **No single Gaussian `Q` matches every interval.** Even at the best fit the
   filter is right at one frame, overconfident at 1-6 s and overcautious beyond
   6 s. That is the signature of aircraft that mostly fly smoothly and
@@ -222,6 +249,39 @@ residuals and runs at about 1.3 cells, so some of its simulated detections fall
 outside a one-cell gate. Real radar noise is a fraction of a cell, and no node
 replay lost a real aircraft that way.
 
+## Validation on recorded histories, 11 October
+
+Each node's last 4 hours of history (every detection the tracker received,
+including those below its old `min_snr`) were replayed through three versions
+under that node's own configs, with ADS-B labels from the same run:
+
+- **A**, v0.4.0: 1 km delay noise, 5 s deletion, `min_snr`;
+- **B**, the code deployed for the recordings: blank hold, one-cell `R`;
+- **final**, this change: measured `R` sized for the gate, fitted `Q`, no `min_snr`.
+
+| | jn1: A / B / final | fairforest B: A / B / final | jn2 (UHF): A / B / final |
+| --- | --- | --- | --- |
+| Jumps over 1 km | 88 / 6 / 4 | 28 / 8 / 4 | 79 / 4 / 2 |
+| ADS-B-labelled detections tracked | 99.7% / 100% / 99.5% | 99.4% / 99.9% / 98.8% | 98.6% / 100% / 95.0% |
+| Aircraft mostly tracked | 45 / 45 / 45 of 45 | 137 / 137 / 135 of 137 | 15 / 15 / 14 of 15 |
+| Labelled crossings held | 5/26 / 20/26 / 20/26 | 1/53 / 19/55 / 17/50 | 5/6 / 6/6 / 6/6 |
+| Tracks per ADS-B aircraft | 1.87 / 1.58 / 1.56 | 2.32 / 2.19 / 2.27 | 1.07 / 1.07 / 1.07 |
+| Median NIS at one frame (matched 1.39) | 0.03 / 0.04 / 0.45 | 0.02 / 0.04 / 0.35 | 0.17 / 0.06 / 0.45 |
+
+Most of the improvement over v0.4.0 came with B. Against B, this change halves
+the remaining jumps and removes the per-site SNR threshold, for slightly lower
+recall at fairforest B and jn2. The three aircraft no longer mostly tracked are
+marginal: one has a 454 m jump between consecutive detections, which the gate is
+right to refuse; one is three detections over one second, too short to confirm;
+one is six sparse detections whose Doppler changes fast, which is stitching's job.
+Labels come from the run made by B, which slightly favours B.
+
+**The synthetic harness cannot validate this `R`.** Its noise was fitted to ADS-B
+residuals and runs at about 1.3 delay cells with heavy tails, roughly nine times
+real radar noise, so on it this change keeps 20% of detections. It needs its
+noise model refitted to the measurements here before it can serve as a
+regression check on the filter again.
+
 ## Choosing range_rate, 5 October (superseded)
 
 Tried at 0, 1e-5 and 1e-4 km^2/s^3 with one-cell `R`; removed on 11 October:
@@ -248,10 +308,14 @@ reason, now takes its Doppler from the bistatic range rate and passes.
 
 ## Open
 
-- jn2 carries no ADS-B labels at all over 4 hours, which looks like the
-  wrong-port fault fairforest B had until September. Its aircraft recall cannot
-  be checked until that is fixed.
-- A measured `k` agreeing across sites would tighten this further. The UHF node
-  has no innovations recording yet; one would show whether `k` in cells holds
-  across carriers, which is the claim this design rests on.
-- The adaptive process-noise scale still multiplies only the jerk term.
+- jn2's ADS-B labels work again since the 6 October rollout, but its tar1090 sees
+  about 24 aircraft against 273 at jn1, so its labelled sample stays thin.
+- The Doppler-noise finding, a fixed range rate rather than a fixed share of a
+  bin, rests on one UHF node. A second UHF site would settle it.
+- The synthetic harness's noise model needs refitting to the measured radar
+  noise, heavy tails included, before it can check the filter again.
+- A filter that models the heavy tails directly (for example a Student-t
+  measurement model) would let `R` describe the typical detection and still
+  admit the tail.
+- retina-gui's config editor still offers `min_snr` and describes it as
+  discarding detections, and retina-node's `default.yml` still sets it.
