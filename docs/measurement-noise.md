@@ -61,6 +61,14 @@ By SNR, in 2 dB bands across all three nodes, delay variance falls as
 steeply. Doppler noise barely moves with SNR (fitted exponent 0.06), staying at
 about 0.4 m/s from 8 dB to 40 dB within 1.5x on every node.
 
+The delay scaling has no floor at high SNR, and the data does not ask for one up
+to 32 dB, the strongest band with enough detections (fairforest B, 392 between
+28 and 32 dB). In every band from 8 to 32 dB on every node, the robust width
+stays at 0.38-0.58 of the width `R` gives that SNR. The share of residuals past
+3 sigma of `R` falls from about 1% at 8-12 dB to none above 24 dB. Above 32 dB
+the scale is an extrapolation: at 40 dB it gives 9 m. If a node with stronger
+returns shows its strongest aircraft refused by the gate, floor the scale there.
+
 **Heavy tails, and sizing `R` for the gate.** The widths above are robust
 estimates (median absolute deviation), which describe the typical detection and
 ignore the tails. Real radar noise has heavy tails. Used directly as `R`, the
@@ -280,7 +288,12 @@ Labels come from the run made by B, which slightly favours B.
 residuals and runs at about 1.3 delay cells with heavy tails, roughly nine times
 real radar noise, so on it this change keeps 20% of detections. It needs its
 noise model refitted to the measurements here before it can serve as a
-regression check on the filter again.
+regression check on the filter again. Until then the repo has no end-to-end
+tracker test: `test_integration_synthetic.py` was removed with the anomaly checks
+(see `docs/anomaly-detection.md`) and nothing in `tests/` replaces it. The
+end-to-end check is the replay of recorded node history described under
+"Rerunning the calibration", which runs locally against data that is not in the
+repo.
 
 ## Choosing range_rate, 5 October (superseded)
 
