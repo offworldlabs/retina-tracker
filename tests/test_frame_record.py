@@ -22,8 +22,8 @@ import pytest
 from retina_tracker.config import get_config, set_config
 from retina_tracker.control import start_control_server
 from retina_tracker.history import DetectionHistory, TeeEventWriter
-from retina_tracker.output import InnovationWriter, TrackEventWriter
 from retina_tracker.kalman import range_rate_to_doppler
+from retina_tracker.output import InnovationWriter, TrackEventWriter
 from retina_tracker.server import process_streaming_frame
 from retina_tracker.tracker import MAX_FRAME_RECORDS, Tracker
 
