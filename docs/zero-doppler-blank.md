@@ -158,6 +158,26 @@ harness, with `R` calibrated:
   tracks reacquiring their own target.
 - **Missed at exit.** The target emerged outside the gate.
 
+### False reacquisitions after long holds
+
+Live on jn1 with measured noise (12 October), about 1-3 times per 4 hours a
+track held for 30 s or more took an unrelated detection when it reacquired: for
+example 8.17 km at -24 Hz, then 40 s later 5.36 km at +174 Hz. During a hold the
+track's uncertainty keeps growing, so after half a minute its gate covers
+hundreds of hertz. retina-gui then draws the two points joined by a line.
+
+Constant acceleration fixes the range covered across a gap from the two ends'
+range rates alone: `r_b - r_a = T (rdot_a + rdot_b) / 2`. Over 277 held
+reacquisitions replayed on jn1, fairforest B and jn2, ADS-B aircraft missed that
+by a median of 25 m (90% within 110 m), and every miss over 500 m came after a
+hold of 30-63 s with a Doppler jump of 160-280 Hz. Requiring the miss to sit
+within three standard deviations of the measurement noise at both ends refused
+all 13 of those, at the cost of 2 genuine crossings of 104 that would continue as
+a new track instead. Not yet implemented; it belongs with stitching.
+
+Genuine crossings are also drawn as a long line across the blank, because
+retina-gui joins consecutive points however far apart in time they are.
+
 ## Tried and not shipped
 
 **Identity handover across the blank.** Under constant acceleration the range
