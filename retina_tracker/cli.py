@@ -264,6 +264,7 @@ def main():
             ("dopplerMax", "doppler_max"),
             ("delayMin", "delay_min_bins"),
             ("delayMax", "delay_max_bins"),
+            ("minDoppler", "doppler_blank"),
         ):
             if key in capture:
                 config["radar"][setting] = capture[key]

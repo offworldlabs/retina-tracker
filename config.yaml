@@ -7,7 +7,6 @@ tracker:
   n_window: 6             # Window for M-of-N logic
   n_delete: 10            # Missed frames before deletion
   n_coast: 3              # Missed frames before the association gate stops widening
-  min_snr: 4.0            # Detection threshold (dB) — world.py SNR floor is 4.0
   gate_threshold: 9.0     # Chi-squared gate (99% confidence)
   detection_window: 20    # Rolling detection window for streaming output
 
@@ -33,15 +32,21 @@ radar:
   doppler_max:            # process.ambiguity.dopplerMax, Hz
   delay_min_bins:         # process.ambiguity.delayMin, in delay bins
   delay_max_bins:         # process.ambiguity.delayMax, in delay bins
+  # process.detection.minDoppler, Hz. blah2 never reports within this of zero
+  # Doppler, so a confirmed track predicted there is held rather than deleted
+  # (docs/zero-doppler-blank.md). Unset here for the same reason as the span.
+  doppler_blank:
 
 # Process noise. Bistatic range acceleration is dominated by geometry rather
 # than by the aircraft, so it differs more between sites than between flight
-# phases: two nodes measured 2.9x apart, driven by traffic passing at 29.8 km
-# against 5.8 km. There is therefore no single right jerk, so range_jerk is a
-# floor and the filter widens from it by however far its own residuals say its
-# motion model is failing.
+# phases. Fitted by replaying recorded aircraft tracks against measured R: white
+# jerk of 1e-6 to 3e-6 km^2/s^5 at far-traffic jn2 and 1e-5 at close-traffic jn1
+# and fairforest B. Replayed on all three nodes, a floor of 1e-6 did as well as
+# higher values, which only brought jumps back. The filter can widen from it on
+# its own residuals, but with R sized for the gate that did not engage in replay.
+# docs/measurement-noise.md.
 process_noise:
-  range_jerk: 1.0e-7      # Bistatic range jerk PSD floor (km^2/s^5)
+  range_jerk: 1.0e-6      # Bistatic range jerk PSD floor (km^2/s^5)
   adaptive: true          # Widen from the floor on the filter's own residuals
   max_scale: 25.0         # Ceiling on that widening
   nis_memory: 0.25        # Weight on the newest residual, so ~4 frames of memory
@@ -91,9 +96,6 @@ adsb:
     latitude: 37.7644         # San Francisco (150 Mississippi)
     longitude: -122.3954
     altitude: 23              # meters above WGS84 ellipsoid
-  initial_covariance:
-    position: 100.0           # Position uncertainty (meters)
-    velocity: 5.0             # Velocity uncertainty (m/s)
 
 # Streaming JSONL output (-s flag)
 # Consumers tail the live file only, so each rotation drops whatever they had not

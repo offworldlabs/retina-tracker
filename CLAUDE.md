@@ -133,7 +133,8 @@ Use Claude in Chrome (browser automation) to verify:
 Tests are located in the `tests/` directory:
 - `test_geometry.py` - Coordinate conversion and geometry functions
 - `test_adsb_features.py` - ADS-B tracking features
-- `test_anomaly_detection.py` - Anomaly detection for supersonic targets
+- `test_blank_occlusion.py` - Holding tracks through blah2's zero-Doppler blank
+- `test_measurement_noise.py` - Measured measurement noise and its SNR scaling
 
 All tests must pass before committing.
 
@@ -143,7 +144,7 @@ All tests must pass before committing.
 - **Tracking**: Multi-hypothesis tracking algorithms
 - **Data Fusion**: Track-to-track association and merging
 - **Kalman Filter**: State estimation with delay-Doppler measurements
-- **Anomaly Detection**: Supersonic target detection (Mach 1+)
+- **Anomaly Detection**: Removed while it is rebuilt; see `docs/anomaly-detection.md`
 
 ## Configuration
 

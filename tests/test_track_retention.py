@@ -9,7 +9,7 @@ of a capture. The archive itself is bounded (MAX_COMPLETED_TRACKS) so a
 long-running tracker cannot grow without limit.
 """
 
-from retina_tracker.config import get_config
+from retina_tracker.config import CENTER_FREQUENCY_HZ, SPEED_OF_LIGHT, get_config
 from retina_tracker.tracker import MAX_COMPLETED_TRACKS, MERGE_WINDOW_MS, Tracker
 
 
@@ -17,7 +17,8 @@ def make_detections(delay, doppler, snr=20.0):
     return [{"delay": delay, "doppler": doppler, "snr": snr}]
 
 
-def run_track(tracker, start_ts, n_frames, delay, doppler, step=0.0):
+def run_track(tracker, start_ts, n_frames, delay, doppler):
+    step = -SPEED_OF_LIGHT / CENTER_FREQUENCY_HZ() / 1000.0 * doppler * 0.5
     ts = start_ts
     for i in range(n_frames):
         tracker.process_frame(make_detections(delay + i * step, doppler), ts)
@@ -36,7 +37,7 @@ def idle(tracker, start_ts, duration_ms):
 def test_confirmed_track_survives_aging_out_of_merge_window():
     tracker = Tracker(config=get_config())
 
-    ts = run_track(tracker, 0, 12, 10.0, 50.0, step=0.2)
+    ts = run_track(tracker, 0, 12, 10.0, 50.0)
     confirmed_while_live = len(tracker.get_confirmed_tracks())
     assert confirmed_while_live > 0
 
@@ -52,7 +53,7 @@ def test_archived_tracks_accumulate_across_many_windows():
 
     ts = 0
     for n in range(3):
-        ts = run_track(tracker, ts, 12, 10.0 + n * 40.0, 50.0 + n * 100.0, step=0.2)
+        ts = run_track(tracker, ts, 12, 10.0 + n * 40.0, 50.0 + n * 100.0)
         ts = idle(tracker, ts, MERGE_WINDOW_MS * 3)
 
     assert len(tracker.get_confirmed_tracks()) >= 3
@@ -61,7 +62,7 @@ def test_archived_tracks_accumulate_across_many_windows():
 def test_no_double_counting_between_archive_and_merge_window():
     tracker = Tracker(config=get_config())
 
-    ts = run_track(tracker, 0, 12, 10.0, 50.0, step=0.2)
+    ts = run_track(tracker, 0, 12, 10.0, 50.0)
     idle(tracker, ts, MERGE_WINDOW_MS * 4)
 
     confirmed = tracker.get_confirmed_tracks()
@@ -80,7 +81,7 @@ def test_archive_is_bounded():
 def test_reset_clears_the_archive():
     tracker = Tracker(config=get_config())
 
-    ts = run_track(tracker, 0, 12, 10.0, 50.0, step=0.2)
+    ts = run_track(tracker, 0, 12, 10.0, 50.0)
     idle(tracker, ts, MERGE_WINDOW_MS * 4)
     assert len(tracker.completed_tracks) > 0
 

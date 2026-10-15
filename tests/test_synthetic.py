@@ -215,8 +215,6 @@ def test_scorer_gives_a_perfect_tracker_full_marks(runs):
         {
             "id": f"260908-{hexid.upper()}",
             "n_associated": len(entry["timestamps"]),
-            "is_anomalous": False,
-            "anomaly_types": [],
             "history": entry,
         }
         for hexid, entry in by_source.items()
@@ -229,7 +227,26 @@ def test_scorer_gives_a_perfect_tracker_full_marks(runs):
     assert result["id_switches"] == 0
     assert result["false_tracks"] == 0
     assert result["mislabelled_track_ids"] == 0
-    assert result["anomaly_false_positive_rate"] == 0.0
+    assert result["blank_crossing_rate"] in (None, 1.0)
+
+
+def test_scorer_counts_a_crossing_split_across_two_tracks_as_dropped():
+    points = [(0, 30.0), (1, 20.0), (2, -20.0), (3, -30.0)]
+    frames = [{"timestamp": t, "delay": [20.0], "doppler": [d]} for t, d in points]
+    truths = [{"sources": ["a1"], "targets": {"a1": {"detected": True}}} for _ in frames]
+
+    def track(track_id, points):
+        history = {
+            "timestamps": [p[0] for p in points],
+            "delays": [20.0] * len(points),
+            "dopplers": [p[1] for p in points],
+        }
+        return {"id": track_id, "n_associated": len(points), "history": history}
+
+    held = score(truths, frames, [track("x", points)], min_associations=1)
+    split = score(truths, frames, [track("x", points[:2]), track("y", points[2:])], min_associations=1)
+    assert (held["blank_crossings_held"], held["blank_crossings_reached"]) == (1, 1)
+    assert (split["blank_crossings_held"], split["blank_crossings_reached"]) == (0, 1)
 
 
 def test_scorer_notices_a_track_that_swaps_identity(runs):
@@ -246,8 +263,6 @@ def test_scorer_notices_a_track_that_swaps_identity(runs):
     track = {
         "id": f"260908-{first.upper()}",
         "n_associated": len(chosen),
-        "is_anomalous": False,
-        "anomaly_types": [],
         "history": {
             "timestamps": [p[0] for p in chosen],
             "delays": [p[1] for p in chosen],
@@ -270,8 +285,6 @@ def test_clutter_only_track_is_scored_as_false(runs):
     track = {
         "id": "260908-00000A",
         "n_associated": len(clutter),
-        "is_anomalous": False,
-        "anomaly_types": [],
         "history": {
             "timestamps": [c[0] for c in clutter],
             "delays": [c[1] for c in clutter],

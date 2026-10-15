@@ -39,6 +39,7 @@ def load_blah2_config(blah2_config_path):
             "dopplerMax": ambiguity.get("dopplerMax"),
             "delayMin": ambiguity.get("delayMin"),
             "delayMax": ambiguity.get("delayMax"),
+            "minDoppler": config.get("process", {}).get("detection", {}).get("minDoppler"),
         }
         found = {k: v for k, v in found.items() if v is not None}
         for lo, hi in (("dopplerMin", "dopplerMax"), ("delayMin", "delayMax")):
@@ -82,11 +83,15 @@ def load_config(config_path=None):
             "n_window": 6,
             "n_delete": 10,
             "n_coast": 3,
-            "min_snr": 4.0,
             "gate_threshold": 9.0,
             "detection_window": 20,
         },
-        "process_noise": {"range_jerk": 1e-7, "adaptive": True, "max_scale": 25.0, "nis_memory": 0.25},
+        "process_noise": {
+            "range_jerk": 1e-6,
+            "adaptive": True,
+            "max_scale": 25.0,
+            "nis_memory": 0.25,
+        },
         "tracklet": {"max_delay_residual": 2.0, "max_doppler_residual": 10.0, "max_time_span": 3.0},
         "shadow": {"enabled": True, "delay_km": 3.0, "snr_margin_db": 3.0, "min_fraction": 0.5},
         "interference": {
@@ -101,7 +106,6 @@ def load_config(config_path=None):
             "enabled": False,
             "priority": True,
             "reference_location": None,
-            "initial_covariance": {"position": 100.0, "velocity": 5.0},
         },
         "radar": {
             "blah2_config": None,
@@ -116,6 +120,10 @@ def load_config(config_path=None):
             "doppler_max": None,
             "delay_min_bins": None,
             "delay_max_bins": None,
+            # blah2's detector drops anything within this many Hz of zero, so
+            # a target crossing zero Doppler is invisible for as long as it
+            # takes to cross. None means nobody has said.
+            "doppler_blank": None,
         },
         "tcp": {
             "host": "0.0.0.0",
@@ -190,10 +198,6 @@ def GATE_THRESHOLD():
     return _get_param("tracker", "gate_threshold", 9.0)
 
 
-def MIN_SNR():
-    return _get_param("tracker", "min_snr", 4.0)
-
-
 def OUTPUT_MAX_BYTES():
     return _get_param("output", "max_bytes", 67108864)
 
@@ -202,9 +206,25 @@ def OUTPUT_BACKUP_COUNT():
     return _get_param("output", "backup_count", 1)
 
 
-MEASUREMENT_NOISE_DELAY = 1.0
-MEASUREMENT_NOISE_DOPPLER = 5.0
+# Measurement noise, measured on jn1, fairforest B and jn2 (UHF) from smoother
+# residuals of ADS-B and physics-checked tracks. The typical width is 0.12 cells
+# of delay at 10 dB, falling as SNR^-0.4 in variance, and 0.4 m/s of range rate
+# on both bands, barely moving with SNR, so it is not in bins. The noise has
+# heavy tails, so at that width the gate refused 8-12% of real aircraft
+# measurements; these are twice it, the factor every node needed for the gate
+# to admit 98.9% as it promises. See docs/measurement-noise.md.
+MEASUREMENT_NOISE_DELAY_CELLS = 0.25
+MEASUREMENT_NOISE_RANGE_RATE_KM_S = 0.0008
+MEASUREMENT_NOISE_DELAY_SNR_EXPONENT = 0.4
 INITIAL_RANGE_ACCEL_VARIANCE = 1e-4
+
+
+def MEASUREMENT_NOISE_DELAY_KM2():
+    return (MEASUREMENT_NOISE_DELAY_CELLS * DELAY_CELL_KM()) ** 2
+
+
+def MEASUREMENT_NOISE_RANGE_RATE_KM2():
+    return MEASUREMENT_NOISE_RANGE_RATE_KM_S**2
 
 
 def CENTER_FREQUENCY_HZ():
@@ -250,6 +270,16 @@ def DOPPLER_MIN_HZ():
 
 def DOPPLER_MAX_HZ():
     return _get_param("radar", "doppler_max")
+
+
+def DOPPLER_BLANK_HZ():
+    """Half-width of the band around zero Doppler that blah2 never reports.
+
+    process.detection.minDoppler. A target inside it cannot be detected
+    however strong it is, so a confirmed track predicted there is occluded
+    rather than missing.
+    """
+    return _get_param("radar", "doppler_blank")
 
 
 def ordered_bounds(lo, hi):
@@ -309,7 +339,7 @@ def INTERFERENCE_MIN_SAMPLES():
 
 
 def PROCESS_NOISE_JERK():
-    return _get_param("process_noise", "range_jerk", 1e-7)
+    return _get_param("process_noise", "range_jerk", 1e-6)
 
 
 def PROCESS_NOISE_ADAPTIVE():
@@ -352,36 +382,4 @@ def TRACKLET_MAX_TIME_SPAN():
     return _get_param("tracklet", "max_time_span", 3.0)
 
 
-# Anomaly detection constants
 SPEED_OF_LIGHT = 299792458.0
-MACH_1_MS = 343.0
-KNOTS_TO_MS = 0.514444
-MAX_NORMAL_ACCEL_MS2 = 15.0
-MAX_DIRECTION_CHANGE_DEG_PER_SEC = 30.0
-
-# Sustained orbit detection
-ORBIT_HEADING_WINDOW = 4  # consecutive frames to accumulate
-ORBIT_MIN_CUMULATIVE_DEG = 270.0  # total |heading change| over window to flag
-
-# GPS spoof detection (position mismatch)
-SPOOF_POSITION_EPSILON_DEG = 0.002  # ~220 m — below this ADS-B is "frozen"
-SPOOF_MIN_SPEED_KTS = 50  # aircraft must report moving
-SPOOF_MIN_FROZEN_FRAMES = 2  # consecutive frozen frames to flag
-
-# Altitude anomaly
-ALTITUDE_JUMP_THRESHOLD_FT = 8000.0  # impossible alt change in one frame
-
-# Anomalous acceleration (extreme, >10g)
-ANOMALOUS_ACCEL_MS2 = 98.1  # 10g × 9.81 m/s²
-
-# Long hover detection
-LONG_HOVER_POSITION_EPSILON_DEG = 0.001  # ~111 m — position "frozen" threshold
-LONG_HOVER_MIN_DURATION_S = 900.0  # 15 minutes
-
-
-def get_mach1_doppler_threshold():
-    """Calculate Doppler threshold for Mach 1 based on center frequency.
-
-    Uses worst-case bistatic geometry (TX/RX collocated): f_d = 2 * v * fc / c
-    """
-    return 2 * MACH_1_MS * CENTER_FREQUENCY_HZ() / SPEED_OF_LIGHT

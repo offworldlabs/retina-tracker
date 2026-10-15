@@ -9,6 +9,7 @@ path that then jumps back once it reacquires the real target.
 """
 
 from retina_tracker.config import set_config
+from retina_tracker.kalman import doppler_to_range_rate
 from retina_tracker.tracker import Tracker
 
 
@@ -81,6 +82,7 @@ def test_long_coasting_track_still_accepts_a_true_reacquisition():
     """The cap must not make coasting tracks impossible to reacquire —
     a detection close to the predicted position still associates."""
     tracker = make_coasting_track(n_coast=3)
-    nearby = {"delay": 10.5, "doppler": -69.0, "snr": 15.0}
+    expected = 10.0 + doppler_to_range_rate(-70.0) * 4.0
+    nearby = {"delay": expected + 0.02, "doppler": -69.5, "snr": 15.0}
 
     assert tracker._associate([nearby]) == [(0, 0)]

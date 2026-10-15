@@ -210,19 +210,19 @@ class TestNonFiniteTimestamp:
 def _make_negative_definite(track, snr=15.0):
     """Drive S negative definite, as an out-of-order frame does.
 
-    S = H P Hᵀ + R·noise_scale, so pushing the two variances below their
+    S = H P Hᵀ + R(snr), so pushing the two variances below their
     measurement-noise terms flips both diagonal entries negative while leaving
     det_S = a*d positive (the state a determinant-sign test cannot see).
     """
-    noise_scale = 1.0 / max(10 ** (snr / 10) / 10, 0.1)
+    noise = track.kf.measurement_noise(snr)
     covariance = track.covariance.copy()
-    covariance[0, 0] = -track.kf.R[0, 0] * noise_scale - 1.0
-    covariance[1, 1] = -track.kf.R[1, 1] * noise_scale - 1.0
+    covariance[0, 0] = -noise[0, 0] - 1.0
+    covariance[1, 1] = -noise[1, 1] - 1.0
     track.covariance = covariance
 
     base = track.get_innovation_base()
-    a = base[0, 0] + track.kf.R[0, 0] * noise_scale
-    d = base[1, 1] + track.kf.R[1, 1] * noise_scale
+    a = base[0, 0] + noise[0, 0]
+    d = base[1, 1] + noise[1, 1]
     assert a < 0 and d < 0 and a * d - base[0, 1] * base[1, 0] > 1e-15, (
         "fixture guard: holds only while the calling test's detections all share this snr"
     )

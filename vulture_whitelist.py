@@ -46,9 +46,6 @@ _.allow_reuse_address
 #   retina_tracker/track.py:36  (unused variable)
 ASSOCIATED
 # TODO: no reference found anywhere in the estate
-#   retina_tracker/config.py:179  (unused variable)
-SPOOF_POSITION_EPSILON_DEG
-# TODO: no reference found anywhere in the estate
 #   retina_tracker/kalman.py:24  (unused attribute)
 _.dim_meas
 # TODO: no reference found anywhere in the estate

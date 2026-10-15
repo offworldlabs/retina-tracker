@@ -80,8 +80,6 @@ outside the defaults assumes Atlanta.
 how many tracks each aircraft was broken into; `purity` and `id_switches` for
 whether a track held one identity; `false_track_rate` and `clutter_absorbed` for
 what the tracker invented; `mislabelled_track_ids` for tracks whose ID no longer
-matches the aircraft they are following.
-
-The generated traffic is entirely ordinary, so `anomaly_false_positive_rate` is
-exactly that: every anomaly raised against this dataset is false by
-construction.
+matches the aircraft they are following. `blank_crossing_rate` is the share of
+zero-Doppler crossings, of those a track reached, where the same track holds the
+aircraft on the far side of blah2's blank.

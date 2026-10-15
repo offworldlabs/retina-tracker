@@ -6,39 +6,27 @@ from enum import Enum
 
 import numpy as np
 
-from . import geometry
 from .config import (
-    ALTITUDE_JUMP_THRESHOLD_FT,
-    ANOMALOUS_ACCEL_MS2,
+    DOPPLER_BIN_HZ,
+    DOPPLER_BLANK_HZ,
+    GATE_THRESHOLD,
     INITIAL_RANGE_ACCEL_VARIANCE,
-    KNOTS_TO_MS,
-    LONG_HOVER_MIN_DURATION_S,
-    LONG_HOVER_POSITION_EPSILON_DEG,
     M_THRESHOLD,
-    MACH_1_MS,
-    MAX_DIRECTION_CHANGE_DEG_PER_SEC,
-    MAX_NORMAL_ACCEL_MS2,
-    MEASUREMENT_NOISE_DELAY,
-    MEASUREMENT_NOISE_DOPPLER,
+    MEASUREMENT_NOISE_DELAY_KM2,
+    MEASUREMENT_NOISE_RANGE_RATE_KM2,
     N_COAST,
     N_DELETE,
     N_WINDOW,
-    ORBIT_HEADING_WINDOW,
-    ORBIT_MIN_CUMULATIVE_DEG,
     PROCESS_NOISE_ADAPTIVE,
     PROCESS_NOISE_MAX_SCALE,
     PROCESS_NOISE_NIS_MEMORY,
     SHADOW_MIN_FRACTION,
-    SPEED_OF_LIGHT,
-    SPOOF_MIN_FROZEN_FRAMES,
-    SPOOF_MIN_SPEED_KTS,
     WAVELENGTH_KM,
-    _get_param,
-    get_mach1_doppler_threshold,
 )
-from .kalman import MEASUREMENT_DIM, doppler_to_range_rate
+from .kalman import MEASUREMENT_DIM, doppler_to_range_rate, range_rate_to_doppler
 
 TRACK_HISTORY_MAX = 600
+MAX_OCCLUDED_S = 120.0
 
 
 class TrackState(Enum):
@@ -91,7 +79,7 @@ class Track:
 
         adsb_config = config.get("adsb", {}) if config else {}
         if detection.get("adsb") and adsb_config.get("enabled") and adsb_config.get("reference_location"):
-            self._init_from_adsb(detection, adsb_config)
+            self._init_from_adsb(detection)
         else:
             self._init_from_delay_doppler(detection)
 
@@ -115,12 +103,17 @@ class Track:
         self.n_frames = 1
         self.n_associated = 0
         self.n_missed = 0
+        self.occluded_s = 0.0
+        self.blanked = False
+        self.last_doppler = detection["doppler"]
+        self.last_update_ms = timestamp
         self.n_observations = 1
         self.nis_ema = float(MEASUREMENT_DIM)
         self.last_dt = None
         self.last_residual = None
         self.last_q_scale = 1.0
         self.last_n_missed = 0
+        self.last_interval_s = None
         self.n_shadowed = 1 if detection.get("shadowed") else 0
         self.n_interfering = 1 if detection.get("interfering") else 0
 
@@ -128,40 +121,8 @@ class Track:
         self.birth_timestamp = timestamp
         self.death_timestamp = timestamp
 
-        self.is_anomalous = False
         self.max_velocity_ms = 0.0
-        self.anomaly_detections = []
-        self.anomaly_types = set()
-        # Pre-latch evidence scores behind the M-of-N anomaly flags — see
-        # the _ANOMALY_STREAMS table.  stream name -> current score.
-        self._anomaly_scores = {}
-        self.last_velocity_ms = None
-        self.last_heading_deg = None
-        self._heading_changes = []
-        self._last_adsb_lat = None
-        self._last_adsb_lon = None
-        self._adsb_frozen_count = 0
-        self._last_alt_baro = None
-        self._hover_anchor_lat = None
-        self._hover_anchor_lon = None
-        self._hover_start_ts = None
-        # Separate from last_velocity_ms — updated by _check_acceleration_anomaly.
-        self._anomalous_accel_last_velocity_ms = None
-        # Identity-swap debounce: require 2 consecutive frames with same new hex
-        # before flagging.  A single misassociation resets the counter.
-        self._identity_mismatch_count = 0
-        self._pending_identity_hex: str | None = None
-        self._check_velocity_anomaly(detection, timestamp)
-        self._check_doppler_anomaly(detection)
-        # Store initial ADS-B reference values for change-detection checks
-        _init_adsb = detection.get("adsb")
-        if _init_adsb and isinstance(_init_adsb, dict) and self._validate_adsb_data(_init_adsb):
-            self._last_adsb_lat = _init_adsb.get("lat")
-            self._last_adsb_lon = _init_adsb.get("lon")
-            self._last_alt_baro = _init_adsb.get("alt_baro")
-            _hdg = _init_adsb.get("track")
-            if _hdg is not None and isinstance(_hdg, (int, float)) and not np.isnan(_hdg):
-                self.last_heading_deg = _hdg
+        self._observe_speed_floor(detection)
 
     @staticmethod
     def _validate_adsb_data(adsb):
@@ -195,471 +156,7 @@ class Track:
 
         return True
 
-    # ── M-of-N anomaly flags ─────────────────────────────────────────────
-    # Flags used to be set by a single observation: one clutter Doppler
-    # spike mis-associated into a track branded it supersonic for life.
-    # Each check now feeds a per-stream evidence score — +1 per anomalous
-    # observation, -1 per affirmatively-clean observation (floor 0) — and
-    # the flag LATCHES permanently once a stream reaches its threshold.
-    # An anomalous object stays anomalous (it does not stop being a
-    # supersonic contact because it slowed down); the score exists only so
-    # that a lone noisy datapoint, or scattered outliers diluted by clean
-    # frames, can never latch the flag.
-    #
-    # Per-frame streams latch at ANOMALY_RAISE_N net observations.
-    # Discrete streams (identity_swap, long_hover) latch on their first
-    # occurrence: their checks already debounce over multiple frames
-    # (2 consecutive mismatched hexes; 15 min of frozen position), so one
-    # occurrence is never a single noisy datapoint — and a genuine
-    # identity swap happens exactly once.
-    #
-    # Observations with no evidence either way (no ADS-B on the frame,
-    # dt outside the comparison window) leave the score untouched.
-    ANOMALY_RAISE_N = 3
-
-    # stream -> (reported type, latch threshold).  "supersonic" is fed by
-    # two streams (Doppler-implied and ADS-B-reported speed) so a spoofer
-    # whose ADS-B claims subsonic cannot vote down its own Doppler
-    # evidence.
-    _ANOMALY_STREAMS = {
-        "supersonic_doppler": ("supersonic", ANOMALY_RAISE_N),
-        "supersonic_velocity": ("supersonic", ANOMALY_RAISE_N),
-        "sustained_orbit": ("sustained_orbit", ANOMALY_RAISE_N),
-        "position_mismatch": ("position_mismatch", ANOMALY_RAISE_N),
-        "instant_acceleration": ("instant_acceleration", ANOMALY_RAISE_N),
-        "instant_direction_change": ("instant_direction_change", ANOMALY_RAISE_N),
-        "altitude_jump": ("altitude_jump", ANOMALY_RAISE_N),
-        "anomalous_acceleration": ("anomalous_acceleration", ANOMALY_RAISE_N),
-        "identity_swap": ("identity_swap", 1),
-        "long_hover": ("long_hover", 1),
-    }
-
-    def _observe_anomaly(self, stream, timestamp=None, event=None):
-        """Record one anomalous observation on *stream*; returns True.
-
-        *event*, when given, is appended to anomaly_detections with the
-        stream's reported type and *timestamp* — every occurrence is
-        logged, whether or not the flag has latched.
-        """
-        atype, thr = self._ANOMALY_STREAMS[stream]
-        if event is not None:
-            self.anomaly_detections.append({"timestamp": timestamp, "type": atype, **event})
-        if atype in self.anomaly_types:
-            return True  # already latched
-        score = self._anomaly_scores.get(stream, 0) + 1
-        self._anomaly_scores[stream] = score
-        if score >= thr:
-            self.anomaly_types.add(atype)
-            self.is_anomalous = True
-        return True
-
-    def _observe_clean(self, stream):
-        """Record one affirmatively-clean observation on *stream*.
-
-        Dilutes pre-latch evidence so scattered outliers never accumulate
-        to the threshold.  Has no effect once the flag has latched.
-        """
-        score = self._anomaly_scores.get(stream, 0)
-        if score:
-            self._anomaly_scores[stream] = score - 1
-
-    def _check_doppler_anomaly(self, detection):
-        doppler = abs(detection["doppler"])
-        threshold = get_mach1_doppler_threshold()
-
-        fc = _get_param("radar", "center_frequency", 200000000)
-        velocity_ms = doppler * SPEED_OF_LIGHT / (2 * fc)
-
-        if velocity_ms > self.max_velocity_ms:
-            self.max_velocity_ms = velocity_ms
-
-        if doppler < threshold:
-            self._observe_clean("supersonic_doppler")
-            return False
-
-        if detection.get("adsb"):
-            adsb_gs = detection["adsb"].get("gs")
-            if adsb_gs is not None and isinstance(adsb_gs, (int, float)) and not np.isnan(adsb_gs):
-                adsb_velocity_ms = adsb_gs * KNOTS_TO_MS
-                if adsb_velocity_ms >= MACH_1_MS:
-                    # Genuinely supersonic and honest about it — clean for
-                    # the unconfirmed-supersonic stream.
-                    self._observe_clean("supersonic_doppler")
-                    return False
-
-        return self._observe_anomaly("supersonic_doppler")
-
-    def _check_velocity_anomaly(self, detection, timestamp):
-        if not detection.get("adsb"):
-            return False
-
-        adsb = detection["adsb"]
-        gs = adsb.get("gs")
-
-        if gs is None or not isinstance(gs, (int, float)) or np.isnan(gs):
-            return False
-
-        velocity_ms = geometry.knots_to_ms(gs)
-
-        if velocity_ms > self.max_velocity_ms:
-            self.max_velocity_ms = velocity_ms
-
-        if velocity_ms > MACH_1_MS:
-            return self._observe_anomaly(
-                "supersonic_velocity",
-                timestamp,
-                {
-                    "velocity_ms": velocity_ms,
-                    "velocity_knots": gs,
-                    "mach": velocity_ms / MACH_1_MS,
-                },
-            )
-
-        self._observe_clean("supersonic_velocity")
-        return False
-
-    def _check_acceleration_anomaly(self, detection, timestamp):
-        if not detection.get("adsb"):
-            return False
-
-        adsb = detection["adsb"]
-        gs = adsb.get("gs")
-
-        if gs is None or not isinstance(gs, (int, float)) or np.isnan(gs):
-            return False
-
-        velocity_ms = geometry.knots_to_ms(gs)
-
-        if self.last_velocity_ms is not None and len(self.history["timestamps"]) > 1:
-            dt = (timestamp - self.history["timestamps"][-2]) / 1000.0
-
-            if dt > 0 and dt < 10.0:
-                dv = abs(velocity_ms - self.last_velocity_ms)
-                acceleration = dv / dt
-
-                if acceleration > MAX_NORMAL_ACCEL_MS2:
-                    self.last_velocity_ms = velocity_ms
-                    return self._observe_anomaly(
-                        "instant_acceleration",
-                        timestamp,
-                        {
-                            "acceleration_ms2": acceleration,
-                            "velocity_change_ms": dv,
-                            "time_delta_sec": dt,
-                        },
-                    )
-                self._observe_clean("instant_acceleration")
-
-        self.last_velocity_ms = velocity_ms
-        return False
-
-    def _check_direction_change_anomaly(self, detection, timestamp):
-        if not detection.get("adsb"):
-            return False
-
-        adsb = detection["adsb"]
-        track = adsb.get("track")
-
-        if track is None or not isinstance(track, (int, float)) or np.isnan(track):
-            return False
-
-        if self.last_heading_deg is not None and len(self.history["timestamps"]) > 1:
-            dt = (timestamp - self.history["timestamps"][-2]) / 1000.0
-
-            if dt > 0 and dt < 10.0:
-                dheading = abs(track - self.last_heading_deg)
-                if dheading > 180:
-                    dheading = 360 - dheading
-
-                turn_rate = dheading / dt
-
-                if turn_rate > MAX_DIRECTION_CHANGE_DEG_PER_SEC:
-                    self.last_heading_deg = track
-                    return self._observe_anomaly(
-                        "instant_direction_change",
-                        timestamp,
-                        {
-                            "turn_rate_deg_per_sec": turn_rate,
-                            "heading_change_deg": dheading,
-                            "time_delta_sec": dt,
-                        },
-                    )
-                self._observe_clean("instant_direction_change")
-
-        self.last_heading_deg = track
-        return False
-
-    def _check_sustained_turn_anomaly(self, detection, timestamp):
-        """Detect sustained orbiting: continuous high turn rate over multiple frames."""
-        if not detection.get("adsb"):
-            return False
-        track_hdg = detection["adsb"].get("track")
-        if track_hdg is None or not isinstance(track_hdg, (int, float)) or np.isnan(track_hdg):
-            return False
-        if self.last_heading_deg is not None:
-            delta = abs(track_hdg - self.last_heading_deg)
-            if delta > 180:
-                delta = 360 - delta
-            self._heading_changes.append(delta)
-            if len(self._heading_changes) > ORBIT_HEADING_WINDOW:
-                self._heading_changes = self._heading_changes[-ORBIT_HEADING_WINDOW:]
-            if len(self._heading_changes) >= ORBIT_HEADING_WINDOW:
-                total = sum(self._heading_changes)
-                if total >= ORBIT_MIN_CUMULATIVE_DEG:
-                    return self._observe_anomaly(
-                        "sustained_orbit",
-                        timestamp,
-                        {
-                            "cumulative_heading_change_deg": total,
-                            "window_frames": len(self._heading_changes),
-                        },
-                    )
-                self._observe_clean("sustained_orbit")
-        return False
-
-    def _check_position_mismatch_anomaly(self, detection, timestamp):
-        """Detect GPS spoofing: ADS-B position frozen while aircraft reports movement.
-
-        Compares the *actual* per-frame position delta against the *expected*
-        delta from gs × dt. Flags only when actual motion is much smaller
-        than expected, so the check is not biased by frame rate or aircraft
-        speed.
-
-        The previous implementation used an absolute 220 m epsilon
-        (SPOOF_POSITION_EPSILON_DEG) without considering dt. At a 1 Hz
-        update rate any aircraft moving below ~440 kt produced a per-frame
-        delta smaller than the absolute threshold — flooding radar3 with
-        false-positive position_mismatch flags on every commercial flight.
-        """
-        if not detection.get("adsb"):
-            return False
-        adsb = detection["adsb"]
-        lat = adsb.get("lat")
-        lon = adsb.get("lon")
-        gs = adsb.get("gs")
-        if lat is None or lon is None or gs is None:
-            return False
-        if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
-            return False
-        if np.isnan(lat) or np.isnan(lon):
-            return False
-        if self._last_adsb_lat is not None and self._last_adsb_lon is not None:
-            dlat = abs(lat - self._last_adsb_lat)
-            dlon = abs(lon - self._last_adsb_lon)
-            dt = None
-            if len(self.history["timestamps"]) > 1:
-                dt = (timestamp - self.history["timestamps"][-2]) / 1000.0
-            if dt is not None and 0 < dt < 60.0 and gs > SPOOF_MIN_SPEED_KTS:
-                # Expected per-frame delta from gs and dt, in degrees lat
-                # (≈111 km/deg). Treat both axes the same — adequate for
-                # the < 20 % "much-smaller-than-expected" comparison.
-                expected_motion_deg = (gs * KNOTS_TO_MS * dt) / 111_000.0
-                frozen_threshold = expected_motion_deg * 0.2
-                is_frozen = dlat < frozen_threshold and dlon < frozen_threshold
-                if is_frozen:
-                    self._adsb_frozen_count += 1
-                else:
-                    self._adsb_frozen_count = 0
-                    self._observe_clean("position_mismatch")
-            else:
-                self._adsb_frozen_count = 0
-            if self._adsb_frozen_count >= SPOOF_MIN_FROZEN_FRAMES:
-                self._last_adsb_lat = lat
-                self._last_adsb_lon = lon
-                return self._observe_anomaly(
-                    "position_mismatch",
-                    timestamp,
-                    {
-                        "frozen_frames": self._adsb_frozen_count,
-                        "reported_gs_kts": gs,
-                        "position_delta_deg": max(dlat, dlon),
-                    },
-                )
-        self._last_adsb_lat = lat
-        self._last_adsb_lon = lon
-        return False
-
-    def _check_identity_change_anomaly(self, detection, timestamp):
-        """Detect transponder identity swap: ADS-B hex changes on continuous track.
-
-        Requires the same new hex to appear in 2 *consecutive* frames before
-        flagging.  A single-frame misassociation (GNN noise) resets the counter
-        on the next correctly-associated frame, suppressing false positives that
-        dominated the anomaly count in dense simulations.
-        """
-        if not detection.get("adsb"):
-            # Non-ADS-B frame — reset debounce, nothing to check
-            self._identity_mismatch_count = 0
-            self._pending_identity_hex = None
-            return False
-        new_hex = detection["adsb"].get("hex")
-        if not new_hex or not isinstance(new_hex, str):
-            return False
-        if self.adsb_hex is None:
-            return False
-        new_hex_lower = new_hex.strip().lower()
-        current_lower = self.adsb_hex.strip().lower()
-        if new_hex_lower == current_lower:
-            # Hex matches — the track is stable; reset debounce
-            self._identity_mismatch_count = 0
-            self._pending_identity_hex = None
-            self._observe_clean("identity_swap")
-            return False
-        # Hex mismatch: advance debounce only when the same new hex repeats
-        if self._pending_identity_hex == new_hex_lower:
-            self._identity_mismatch_count += 1
-        else:
-            self._identity_mismatch_count = 1
-            self._pending_identity_hex = new_hex_lower
-        if self._identity_mismatch_count >= 2:
-            old_hex = self.adsb_hex
-            # Advance adsb_hex so subsequent frames don't re-trigger
-            self.adsb_hex = new_hex
-            self._identity_mismatch_count = 0
-            self._pending_identity_hex = None
-            return self._observe_anomaly(
-                "identity_swap",
-                timestamp,
-                {"old_hex": old_hex, "new_hex": new_hex},
-            )
-        return False
-
-    def _check_altitude_anomaly(self, detection, timestamp):
-        """Detect impossible altitude jumps between consecutive frames.
-
-        Skips the check (and does NOT update the reference altitude) when the
-        detection belongs to a *different* aircraft than the track's established
-        hex.  This prevents misassociation events (GNN associating a detection
-        from aircraft B to aircraft A's track) from triggering false
-        altitude_jump flags due to the two aircraft being at different flight
-        levels.
-        """
-        if not detection.get("adsb"):
-            return False
-        adsb = detection["adsb"]
-        alt_baro = adsb.get("alt_baro")
-        if alt_baro is None or not isinstance(alt_baro, (int, float)) or np.isnan(alt_baro):
-            return False
-        # Guard: if the detection carries a hex that differs from this track's
-        # established identity, the data belongs to a different aircraft.
-        # Do NOT update _last_alt_baro — that would corrupt the reference.
-        if self.adsb_hex is not None:
-            det_hex = (adsb.get("hex") or "").strip().lower()
-            if det_hex and det_hex != self.adsb_hex.strip().lower():
-                return False
-        if self._last_alt_baro is not None:
-            dalt = abs(alt_baro - self._last_alt_baro)
-            if dalt > ALTITUDE_JUMP_THRESHOLD_FT:
-                old_alt = self._last_alt_baro
-                self._last_alt_baro = alt_baro
-                return self._observe_anomaly(
-                    "altitude_jump",
-                    timestamp,
-                    {
-                        "altitude_change_ft": dalt,
-                        "old_alt_ft": old_alt,
-                        "new_alt_ft": alt_baro,
-                    },
-                )
-            self._observe_clean("altitude_jump")
-        self._last_alt_baro = alt_baro
-        return False
-
-    def _check_anomalous_acceleration(self, detection, timestamp):
-        """Detect extreme acceleration exceeding 10g (98.1 m/s²).
-
-        Uses a dedicated velocity field (_anomalous_accel_last_velocity_ms)
-        because last_velocity_ms is already updated by _check_acceleration_anomaly
-        (which runs earlier in update()) — reading it here would always give dv=0.
-        """
-        if not detection.get("adsb"):
-            return False
-
-        adsb = detection["adsb"]
-        gs = adsb.get("gs")
-
-        if gs is None or not isinstance(gs, (int, float)) or np.isnan(gs):
-            return False
-
-        velocity_ms = geometry.knots_to_ms(gs)
-
-        result = False
-        if self._anomalous_accel_last_velocity_ms is not None and len(self.history["timestamps"]) > 1:
-            dt = (timestamp - self.history["timestamps"][-2]) / 1000.0
-
-            if dt > 0 and dt < 120.0:
-                dv = abs(velocity_ms - self._anomalous_accel_last_velocity_ms)
-                acceleration = dv / dt
-
-                if acceleration > ANOMALOUS_ACCEL_MS2:
-                    self._observe_anomaly(
-                        "anomalous_acceleration",
-                        timestamp,
-                        {
-                            "acceleration_ms2": acceleration,
-                            "acceleration_g": round(acceleration / 9.81, 1),
-                            "velocity_change_ms": dv,
-                            "time_delta_sec": dt,
-                        },
-                    )
-                    result = True
-                else:
-                    self._observe_clean("anomalous_acceleration")
-
-        self._anomalous_accel_last_velocity_ms = velocity_ms
-        return result
-
-    def _check_long_hover(self, detection, timestamp):
-        """Detect long hover: position unchanged for 15 min while detections arrive."""
-        if not detection.get("adsb"):
-            return False
-
-        adsb = detection["adsb"]
-        lat = adsb.get("lat")
-        lon = adsb.get("lon")
-
-        if lat is None or lon is None:
-            return False
-        if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
-            return False
-        if np.isnan(lat) or np.isnan(lon):
-            return False
-
-        if self._hover_anchor_lat is None:
-            self._hover_anchor_lat = lat
-            self._hover_anchor_lon = lon
-            self._hover_start_ts = timestamp
-            return False
-
-        dlat = abs(lat - self._hover_anchor_lat)
-        dlon = abs(lon - self._hover_anchor_lon)
-
-        if dlat < LONG_HOVER_POSITION_EPSILON_DEG and dlon < LONG_HOVER_POSITION_EPSILON_DEG:
-            duration_s = (timestamp - self._hover_start_ts) / 1000.0
-            if duration_s >= LONG_HOVER_MIN_DURATION_S:
-                event = {
-                    "hover_duration_s": round(duration_s, 1),
-                    "anchor_lat": self._hover_anchor_lat,
-                    "anchor_lon": self._hover_anchor_lon,
-                }
-                # Reset anchor to avoid repeated firing every frame; a hover
-                # that continues re-raises after the next full duration, and
-                # the score does not decay in between (a hover in progress
-                # is not clean evidence).
-                self._hover_anchor_lat = lat
-                self._hover_anchor_lon = lon
-                self._hover_start_ts = timestamp
-                return self._observe_anomaly("long_hover", timestamp, event)
-        else:
-            # Position moved — reset anchor
-            self._hover_anchor_lat = lat
-            self._hover_anchor_lon = lon
-            self._hover_start_ts = timestamp
-            self._observe_clean("long_hover")
-
-        return False
-
-    def _init_from_adsb(self, detection, adsb_config):
+    def _init_from_adsb(self, detection):
         adsb = detection["adsb"]
 
         if not self._validate_adsb_data(adsb):
@@ -670,15 +167,13 @@ class Track:
         self.adsb_initialized = True
 
         self._init_from_delay_doppler(detection)
-        self.covariance[0, 0] = adsb_config["initial_covariance"]["position"] / 1000.0
 
     def _init_from_delay_doppler(self, detection):
-        wavelength = WAVELENGTH_KM()
         self.state = np.array([detection["delay"], doppler_to_range_rate(detection["doppler"]), 0.0])
         self.covariance = np.diag(
             [
-                MEASUREMENT_NOISE_DELAY,
-                wavelength * wavelength * MEASUREMENT_NOISE_DOPPLER,
+                MEASUREMENT_NOISE_DELAY_KM2(),
+                MEASUREMENT_NOISE_RANGE_RATE_KM2(),
                 INITIAL_RANGE_ACCEL_VARIANCE,
             ]
         )
@@ -747,9 +242,9 @@ class Track:
         # innovation was measured against, and by the end of this method it is
         # gone.
         self.last_n_missed = self.n_missed
-
-        # Identity swap check MUST run before adsb_hex capture
-        self._check_identity_change_anomaly(detection, timestamp)
+        # The true prediction interval. n_missed cannot give it: frames held
+        # through the zero-Doppler blank are not counted as misses.
+        self.last_interval_s = (timestamp - self.last_update_ms) / 1000.0
 
         # Capture ADS-B hex on first association that carries one.  Tracks
         # initialised from clutter miss this in __init__; this back-fills it.
@@ -774,24 +269,32 @@ class Track:
 
         self.n_associated += 1
         self.n_missed = 0
+        self.occluded_s = 0.0
+        self.blanked = False
+        self.last_doppler = detection["doppler"]
+        self.last_update_ms = timestamp
         self.n_frames += 1
 
         self.total_snr += detection.get("snr", 0)
         self.death_timestamp = timestamp
 
-        self._check_velocity_anomaly(detection, timestamp)
-        self._check_doppler_anomaly(detection)
-        self._check_acceleration_anomaly(detection, timestamp)
-        self._check_sustained_turn_anomaly(detection, timestamp)
-        self._check_direction_change_anomaly(detection, timestamp)
-        self._check_position_mismatch_anomaly(detection, timestamp)
-        self._check_altitude_anomaly(detection, timestamp)
-        self._check_anomalous_acceleration(detection, timestamp)
-        self._check_long_hover(detection, timestamp)
+        self._observe_speed_floor(detection)
+
+    def _observe_speed_floor(self, detection):
+        """Bistatic range rate never exceeds twice the target's speed, so |range rate| / 2 floors it in any geometry."""
+        floor_ms = abs(doppler_to_range_rate(detection["doppler"])) * 1000.0 / 2.0
+        self.max_velocity_ms = max(self.max_velocity_ms, floor_ms)
 
     def mark_missed(self, timestamp, frame=0):
-        """Mark track as not associated this frame."""
-        self.n_missed += 1
+        """Mark track as not associated this frame.
+
+        A miss the zero-Doppler blank explains is not counted towards deletion.
+        """
+        if self.is_occluded():
+            self.blanked = self.blanked or self._predicted_through_blank()
+            self.occluded_s += self.last_dt or 0.0
+        else:
+            self.n_missed += 1
         self.n_frames += 1
 
         self.history["timestamps"].append(timestamp)
@@ -801,6 +304,31 @@ class Track:
         self.history["state_status"].append(self.state_status.name)
 
         self.death_timestamp = timestamp
+
+    def is_occluded(self):
+        """Whether blah2's zero-Doppler blank can explain a confirmed track going undetected.
+
+        Once the prediction has entered or crossed the blank this latches until the next
+        association: when the target leaves the blank depends on an acceleration too poorly
+        estimated going in to trust. See docs/zero-doppler-blank.md.
+        """
+        if DOPPLER_BLANK_HZ() is None or self.state_status == TrackState.TENTATIVE:
+            return False
+        if self.blanked or self._predicted_through_blank():
+            return True
+        reach = np.sqrt(GATE_THRESHOLD() * self.covariance[1, 1]) / WAVELENGTH_KM()
+        return abs(range_rate_to_doppler(self.state[1])) - reach < self._blank_edge_hz()
+
+    def max_occluded_s(self):
+        """A track is held no longer than it was observed: extrapolating further is a guess."""
+        return min(MAX_OCCLUDED_S, (self.last_update_ms - self.birth_timestamp) / 1000.0)
+
+    def _blank_edge_hz(self):
+        return DOPPLER_BLANK_HZ() + DOPPLER_BIN_HZ()
+
+    def _predicted_through_blank(self):
+        doppler = range_rate_to_doppler(self.state[1])
+        return abs(doppler) < self._blank_edge_hz() or (doppler > 0) != (self.last_doppler > 0)
 
     def get_predicted_measurement(self):
         return self.kf.H @ self.state
@@ -888,7 +416,7 @@ class Track:
         if self.state_status == TrackState.TENTATIVE:
             return self.n_frames > N_WINDOW()
         else:
-            return self.n_missed > N_DELETE()
+            return self.n_missed > N_DELETE() or self.occluded_s > self.max_occluded_s()
 
     def get_length_bucket(self):
         if self.n_associated < 10:
@@ -962,10 +490,7 @@ class Track:
             "interference_fraction": self.interference_fraction(),
             "birth_timestamp": self.birth_timestamp,
             "death_timestamp": self.death_timestamp,
-            "is_anomalous": self.is_anomalous,
             "max_velocity_ms": self.max_velocity_ms,
-            "anomaly_types": list(self.anomaly_types),
-            "anomaly_detections": self.anomaly_detections,
             "history": {
                 "timestamps": hist_timestamps,
                 "states": [s.tolist() for s in hist_states],

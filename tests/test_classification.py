@@ -1,11 +1,11 @@
 """Every detection the tracker is given comes back out, classified.
 
 The tracker consumed detections and only ever reported the ones that ended up
-inside a confirmed track. Two exits were silent: anything below MIN_SNR was
-dropped at the gate before the tracker looked at it, and anything that started
-a tentative track which never promoted disappeared with it. Nothing
-downstream could tell "the tracker rejected what it saw" from "there was
-nothing to see".
+inside a confirmed track: anything that started a tentative track which never
+promoted disappeared with it, so nothing downstream could tell "the tracker
+rejected what it saw" from "there was nothing to see". There is no SNR
+threshold; every detection with a finite SNR is tracked, and below_snr stays
+empty.
 
 The subtlety these pin down is *when* a verdict is final. "Associated" means
 the detection ended up in a track that was confirmed, and that is not knowable
@@ -14,7 +14,8 @@ at the moment the detection arrives.
 
 import pytest
 
-from retina_tracker.config import get_config, set_config
+from retina_tracker.config import get_config
+from retina_tracker.kalman import doppler_to_range_rate
 from retina_tracker.server import process_streaming_frame
 from retina_tracker.tracker import Tracker
 
@@ -69,9 +70,11 @@ def frame(tracker, timestamp, points):
     )
 
 
-def steady_target(tracker, frames, delay=10.0, doppler=50.0, snr=15.0, start=1000, step=500):
-    for i in range(frames):
-        frame(tracker, start + i * step, [(delay + i * 0.05, doppler - i * 0.2, snr)])
+def steady_target(tracker, frames, delay=10.0, doppler=50.0, snr=15.0, start=1000, step=500, first=0):
+    """A target whose delay moves exactly as its own Doppler says, from frame `first` of its trajectory."""
+    per_frame = doppler_to_range_rate(doppler) * step / 1000.0
+    for i in range(first, first + frames):
+        frame(tracker, start + i * step, [(delay + i * per_frame, doppler, snr)])
 
 
 def drain(tracker, start_ts=900000, max_frames=120):
@@ -92,48 +95,34 @@ def drain(tracker, start_ts=900000, max_frames=120):
 # ── the SNR gate ────────────────────────────────────────────────────────────
 
 
-def test_detections_below_the_gate_are_reported_not_discarded(sink):
-    """The blind spot this exists to close."""
-    min_snr = get_config()["tracker"]["min_snr"]
+def test_a_weak_detection_is_tracked_not_set_aside(sink):
+    """No SNR threshold: noise is rejected by the gate and the physics."""
     tracker = make_tracker(sink)
-    frame(tracker, 1000, [(10.0, 50.0, min_snr + 5), (20.0, -30.0, min_snr - 1)])
-    drain(tracker)
-
-    assert sink.count("below_snr") == 1
-    assert sink.snrs("below_snr") == [min_snr - 1]
-
-
-def test_a_detection_exactly_on_the_gate_is_kept(sink):
-    """`>=`, matching the filter this replaced."""
-    min_snr = get_config()["tracker"]["min_snr"]
-    tracker = make_tracker(sink)
-    frame(tracker, 1000, [(10.0, 50.0, min_snr)])
+    frame(tracker, 1000, [(10.0, 50.0, 20.0), (20.0, -30.0, 1.0)])
     drain(tracker)
 
     assert sink.count("below_snr") == 0
-    assert sink.count("associated") + sink.count("unassociated") == 1
+    assert sink.count("associated") + sink.count("unassociated") == 2
 
 
-def test_a_nan_snr_lands_in_exactly_one_bucket(sink):
-    """NaN fails both comparisons, so two comprehensions would have dropped
-    it from the accounting entirely."""
+def test_a_nan_snr_is_rejected_and_counted(sink):
+    """SNR scales the measurement noise, so a NaN would poison the filter."""
     tracker = make_tracker(sink)
     frame(tracker, 1000, [(10.0, 50.0, float("nan"))])
     drain(tracker)
 
-    total = sink.count("associated") + sink.count("unassociated") + sink.count("below_snr")
-    assert total == 1
+    assert tracker.n_detections_rejected == 1
+    assert sink.count("associated") + sink.count("unassociated") + sink.count("below_snr") == 0
 
 
 def test_every_detection_is_accounted_for(sink):
-    min_snr = get_config()["tracker"]["min_snr"]
     tracker = make_tracker(sink)
     given = 0
     for i in range(12):
         points = [
-            (10.0 + i * 0.05, 50.0, min_snr + 8),
-            (200.0, -100.0, min_snr - 2),
-            (55.0 + i * 3.0, 20.0, min_snr + 1),
+            (10.0 + i * 0.05, 50.0, 18.0),
+            (200.0, -100.0, 2.0),
+            (55.0 + i * 3.0, 20.0, 9.0),
         ]
         given += len(points)
         frame(tracker, 1000 + i * 500, points)
@@ -195,28 +184,11 @@ def test_a_detection_joining_an_established_track_is_not_delayed(sink):
     steady_target(tracker, 12)
     released_before = len(sink.calls)
 
-    steady_target(tracker, 1, start=1000 + 12 * 500)
+    steady_target(tracker, 1, first=12)
     assert len(sink.calls) == released_before + 1
 
 
 # ── ordering and bounds ─────────────────────────────────────────────────────
-
-
-def test_a_rejected_detection_waits_for_its_frame(sink):
-    """Deliberate. A below-gate detection's verdict is known the moment it
-    arrives, but releasing it ahead of the rest of its frame would mean
-    emitting the same frame twice and out of order. One call per frame, in
-    order, is worth a few frames of lag to the consumer that buffers these.
-    """
-    min_snr = get_config()["tracker"]["min_snr"]
-    tracker = make_tracker(sink)
-    frame(tracker, 1000, [(10.0, 50.0, min_snr + 5), (20.0, -30.0, min_snr - 1)])
-
-    assert sink.calls == [], "the rejected detection outran its frame"
-
-    drain(tracker)
-    assert sink.calls[0]["timestamp"] == 1000
-    assert len(sink.calls[0]["below_snr"]) == 1
 
 
 def test_frames_are_released_in_order(sink):
@@ -271,17 +243,3 @@ def test_no_sink_means_no_bookkeeping():
     tracker = Tracker(config=get_config())
     steady_target(tracker, 12)
     assert len(tracker._pending_classification) == 0
-
-
-def test_the_gate_still_filters_what_the_tracker_sees(sink):
-    """Reporting the rejects must not mean tracking them."""
-    original = get_config()
-    try:
-        set_config({**original, "tracker": {**original["tracker"], "min_snr": 10.0}})
-        tracker = make_tracker(sink)
-        for i in range(12):
-            frame(tracker, 1000 + i * 500, [(10.0 + i * 0.05, 50.0, 2.0)])
-        assert tracker.tracks == [], "a sub-threshold detection was tracked"
-        assert sink.count("below_snr") == 12
-    finally:
-        set_config(original)

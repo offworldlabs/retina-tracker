@@ -22,6 +22,7 @@ import pytest
 from retina_tracker.config import get_config, set_config
 from retina_tracker.control import start_control_server
 from retina_tracker.history import DetectionHistory, TeeEventWriter
+from retina_tracker.kalman import range_rate_to_doppler
 from retina_tracker.output import InnovationWriter, TrackEventWriter
 from retina_tracker.server import process_streaming_frame
 from retina_tracker.tracker import MAX_FRAME_RECORDS, Tracker
@@ -43,13 +44,18 @@ def ts(i):
     return T0 + i * DT_MS
 
 
+def opening_doppler():
+    """The Doppler of a target opening 50 m per frame, at whatever carrier is configured."""
+    return range_rate_to_doppler(0.05 / (DT_MS / 1000.0))
+
+
 def target_frame(i):
     """One aircraft, preceded in the arrays by a detection the tracker rejects
     (non-finite delay) and one it partitions out as below SNR."""
     return {
         "timestamp": ts(i),
         "delay": [float("nan"), 30.0, 10.0 + 0.05 * i],
-        "doppler": [0.0, -100.0, 50.0],
+        "doppler": [0.0, -100.0, opening_doppler()],
         "snr": [20.0, 1.0, 15.0],
     }
 
@@ -138,7 +144,7 @@ def test_a_confirmed_track_is_listed_deleted_exactly_once(tracker):
 
 def test_a_detection_without_a_frame_index_gives_a_null_hit(tracker):
     for i in range(5):
-        tracker.process_frame([{"delay": 10.0 + 0.05 * i, "doppler": 50.0, "snr": 15.0}], ts(i))
+        tracker.process_frame([{"delay": 10.0 + 0.05 * i, "doppler": opening_doppler(), "snr": 15.0}], ts(i))
     [track] = tracker.frame_record(ts(4))["tracks"]
     assert track["state"] == "active"
     assert track["hit"] is None

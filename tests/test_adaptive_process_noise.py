@@ -103,5 +103,6 @@ class TestTheFilterReportsAndUsesIt:
         track = a_track()
         rate = track.state[1]
         for i in range(1, 12):
+            track.predict(1.0)
             track.update(det(delay=10.0 + rate * i), i * 1000, frame=i)
         assert track.process_noise_scale() == pytest.approx(1.0)

@@ -7,7 +7,12 @@ import json
 import os
 import sys
 
-from retina_tracker.track_detections import process_detections, set_config
+from retina_tracker.track_detections import SPEED_OF_LIGHT, process_detections, set_config
+
+
+def follow(delay0, doppler, t_s, fc=200000000):
+    """Delay where the target's own Doppler puts it t_s seconds on."""
+    return delay0 - SPEED_OF_LIGHT / fc / 1000.0 * doppler * t_s
 
 
 def create_test_detection_file():
@@ -33,7 +38,7 @@ def create_test_detection_file():
         detections.append(
             {
                 "timestamp": 1700000000000 + i * 500,
-                "delay": [50.0 + i * 0.5, 75.0 - i * 0.3],
+                "delay": [follow(50.0, 100.0 - i * 2, i * 0.5), follow(75.0, -50.0 + i * 1.5, i * 0.5)],
                 "doppler": [100.0 - i * 2, -50.0 + i * 1.5],
                 "snr": [15.5, 12.5],
                 "adsb": [
@@ -148,7 +153,12 @@ def test_backward_compatibility():
     detections = []
     for i in range(5):
         detections.append(
-            {"timestamp": 1700000000000 + i * 500, "delay": [50.0 + i * 0.5], "doppler": [100.0 - i * 2], "snr": [15.0]}
+            {
+                "timestamp": 1700000000000 + i * 500,
+                "delay": [follow(50.0, 100.0 - i * 2, i * 0.5)],
+                "doppler": [100.0 - i * 2],
+                "snr": [15.0],
+            }
         )
 
     with open("test_old_format.detection", "w") as f:
