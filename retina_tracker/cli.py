@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 
 import numpy as np
@@ -178,6 +179,14 @@ def visualize_tracks(
     print(f"Saved visualization to {output_image}", file=sys.stderr)
 
 
+def coverage_state_path(args):
+    if args.coverage_state:
+        return args.coverage_state
+    if args.stream_output and args.stream_output != "-":
+        return os.path.join(os.path.dirname(os.path.abspath(args.stream_output)), "coverage.json")
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Track bistatic radar detections")
     parser.add_argument("file", nargs="?", help="Path to .detection file (omit for --tcp mode)")
@@ -242,6 +251,12 @@ def main():
         "footprint stays predictable whatever the detection rate "
         "(default: 500000, about 10 MB per class).",
     )
+    parser.add_argument(
+        "--coverage-state",
+        type=str,
+        help="Where the coverage wedge is saved across restarts "
+        "(default: coverage.json beside the -s events file; memory only when -s is stdout or absent).",
+    )
 
     args = parser.parse_args()
 
@@ -268,6 +283,8 @@ def main():
         ):
             if key in capture:
                 config["radar"][setting] = capture[key]
+        if "location" in capture:
+            config["location"] = capture["location"]
 
     event_writer = None
     if args.stream_output:
@@ -299,6 +316,7 @@ def main():
             history_window_s=args.history_window,
             history_max_points=args.history_max_points,
             innovation_writer=innovation_writer,
+            coverage_state_path=coverage_state_path(args),
         )
     else:
         tracker = process_detections(

@@ -135,6 +135,7 @@ Tests are located in the `tests/` directory:
 - `test_adsb_features.py` - ADS-B tracking features
 - `test_blank_occlusion.py` - Holding tracks through blah2's zero-Doppler blank
 - `test_measurement_noise.py` - Measured measurement noise and its SNR scaling
+- `test_coverage.py` - The ADS-B-proven coverage wedge, its arcs and endpoints (`docs/coverage-wedge.md`)
 
 All tests must pass before committing.
 

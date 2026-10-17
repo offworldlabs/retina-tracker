@@ -312,7 +312,7 @@ def test_stats_reports_what_is_held_and_what_it_costs(history):
     assert stats["detections"]["associated"] == 100
     assert stats["tracks"] == 1
     assert stats["points"] == 301
-    assert stats["approx_bytes"] == 301 * 20
+    assert stats["approx_bytes"] == 300 * 20 + 1 * 28
 
 
 def test_the_footprint_is_what_it_claims():

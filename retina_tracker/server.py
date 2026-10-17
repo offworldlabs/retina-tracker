@@ -6,10 +6,11 @@ import socket
 import sys
 import threading
 
-from .config import get_config
+from .config import COVERAGE_ENABLED, LOCATION, get_config
 from .control import DEFAULT_HOST as CONTROL_HOST
 from .control import DEFAULT_PORT as CONTROL_PORT
 from .control import start_control_server
+from .coverage import Coverage, Geometry, start_saver
 from .history import MAX_POINTS, WINDOW_S, DetectionHistory, TeeEventWriter, start_pruner
 from .tracker import Tracker
 
@@ -176,6 +177,7 @@ def run_tcp_server(
     history_window_s=WINDOW_S,
     history_max_points=MAX_POINTS,
     innovation_writer=None,
+    coverage_state_path=None,
 ):
     """Run tracker as TCP server receiving detection frames from blah2.
 
@@ -190,15 +192,25 @@ def run_tcp_server(
         history_window_s: How much of the recent past to keep in memory
         history_max_points: Hard ceiling per detection class, whatever the rate
         innovation_writer: InnovationWriter for R/Q calibration, or None
+        coverage_state_path: Where the coverage wedge is saved across restarts, or None for memory only
     """
     # In memory rather than on disk: it does not need to survive a restart,
     # and the alternative was several hundred megabytes a day onto an SD card.
     history = DetectionHistory(window_s=history_window_s, max_points=history_max_points)
 
+    coverage = None
+    if COVERAGE_ENABLED():
+        geometry = Geometry.from_location(LOCATION())
+        if geometry is None:
+            print("Coverage wedge off: no receiver and transmitter location in config", file=sys.stderr)
+        coverage = Coverage(geometry, state_path=coverage_state_path)
+        coverage.load()
+        start_saver(coverage)
+
     tracker = Tracker(
         # The file's writer deduplicates detections, so it goes first and the
         # history records what was actually written.
-        event_writer=TeeEventWriter(event_writer, history),
+        event_writer=TeeEventWriter(event_writer, history, coverage),
         detection_window=detection_window,
         config=config or get_config(),
         detection_sink=history,
@@ -212,7 +224,9 @@ def run_tcp_server(
     tracker_lock = threading.Lock()
 
     if control_port:
-        control = start_control_server(tracker, tracker_lock, host=control_host, port=control_port, history=history)
+        control = start_control_server(
+            tracker, tracker_lock, host=control_host, port=control_port, history=history, coverage=coverage
+        )
         print(f"Tracker control on {control_host}:{control.port}", file=sys.stderr)
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

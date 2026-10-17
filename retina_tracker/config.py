@@ -42,6 +42,9 @@ def load_blah2_config(blah2_config_path):
             "minDoppler": config.get("process", {}).get("detection", {}).get("minDoppler"),
         }
         found = {k: v for k, v in found.items() if v is not None}
+        location = config.get("location") or {}
+        if isinstance(location.get("rx"), dict) and isinstance(location.get("tx"), dict):
+            found["location"] = {"rx": location["rx"], "tx": location["tx"]}
         for lo, hi in (("dopplerMin", "dopplerMax"), ("delayMin", "delayMax")):
             if lo in found and hi in found and found[lo] > found[hi]:
                 print(
@@ -124,6 +127,14 @@ def load_config(config_path=None):
             # a target crossing zero Doppler is invisible for as long as it
             # takes to cross. None means nobody has said.
             "doppler_blank": None,
+        },
+        "location": {"rx": None, "tx": None},
+        "coverage": {
+            "enabled": True,
+            "bin_deg": 5.0,
+            "hold_s": 86400,
+            "max_position_age_s": 10.0,
+            "min_pass_detections": 3,
         },
         "tcp": {
             "host": "0.0.0.0",
@@ -368,6 +379,30 @@ def SHADOW_SNR_MARGIN_DB():
 
 def SHADOW_MIN_FRACTION():
     return _get_param("shadow", "min_fraction", 0.5)
+
+
+def LOCATION():
+    return get_config().get("location") or {}
+
+
+def COVERAGE_ENABLED():
+    return _get_param("coverage", "enabled", True)
+
+
+def COVERAGE_BIN_DEG():
+    return _get_param("coverage", "bin_deg", 5.0)
+
+
+def COVERAGE_HOLD_S():
+    return _get_param("coverage", "hold_s", 86400)
+
+
+def COVERAGE_MAX_POSITION_AGE_S():
+    return _get_param("coverage", "max_position_age_s", 10.0)
+
+
+def COVERAGE_MIN_PASS_DETECTIONS():
+    return _get_param("coverage", "min_pass_detections", 3)
 
 
 def TRACKLET_MAX_DELAY_RESIDUAL():

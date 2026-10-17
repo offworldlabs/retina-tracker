@@ -30,8 +30,13 @@ Routes:
                           the newest held timestamp (null if none), so a
                           caller can tell "not yet" from "gone" from "not fed"
     GET  /events          server-sent events from the detection history
+    GET  /coverage        the ADS-B-proven coverage wedge
+    GET  /coverage/arcs   the latest delay arc of each unlabelled track
+    GET  /coverage/track/<id>
+                          arcs spread over one track, for the page's replay
     POST /reset           clear the tracker, between search geometries
     POST /history/clear   clear the history, keep tracking
+    POST /coverage/reset  clear the coverage wedge, keep tracking
 
 Bound to loopback by default for the same reason the ingest socket is (see the
 sidecar's compose command): the container runs with network_mode host, so
@@ -42,10 +47,13 @@ two clients; a framework would be a dependency and an image layer for nothing.
 """
 
 import json
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
+
+from .coverage import replay_arcs
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 30101
@@ -63,6 +71,8 @@ HEARTBEAT_S = 15.0
 # Clamped rather than rejected. A window is a display preference, and must
 # never let a query string ask for more than is held.
 MIN_WINDOW_S = 60
+
+TRACK_ID = re.compile(r"[A-Za-z0-9-]{1,40}")
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -97,6 +107,13 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(503, {"error": "history not enabled"})
                 return
             self.server.history.clear()
+            self._send(200, {"ok": True})
+            return
+        if self._route() == "/coverage/reset":
+            if self.server.coverage is None:
+                self._send(503, {"error": "coverage not enabled"})
+                return
+            self.server.coverage.reset()
             self._send(200, {"ok": True})
             return
         if self._route() == "/reset":
@@ -135,6 +152,46 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if route == "/events":
             self._stream()
+            return
+        if route == "/coverage" or route.startswith("/coverage/"):
+            self._coverage(route)
+            return
+        self._send(404, {"error": "not found"})
+
+    def _coverage(self, route):
+        """The wedge, and arcs cut to it. See docs/coverage-wedge.md#endpoints."""
+        coverage = self.server.coverage
+        if coverage is None:
+            self._send(503, {"error": "coverage not enabled"})
+            return
+        if route == "/coverage":
+            self._send(200, coverage.state())
+            return
+        history = self.server.history
+        if history is None:
+            self._send(503, {"error": "history not enabled"})
+            return
+        if route == "/coverage/arcs":
+            window_s = self._window()
+            arcs = [
+                {"id": tid, "t": t, "delay": delay, "arc": coverage.arc(delay)}
+                for tid, t, delay, adsb_hex in history.latest(window_s=window_s)
+                if not adsb_hex
+            ]
+            self._send(200, {"arcs": arcs})
+            return
+        if route.startswith("/coverage/track/"):
+            track_id = unquote(route[len("/coverage/track/") :])
+            if not TRACK_ID.fullmatch(track_id):
+                self._send(400, {"error": "bad track id"})
+                return
+            track = history.track(track_id)
+            if track is None:
+                self._send(404, {"error": "track not held"})
+                return
+            self._send(
+                200, {"id": track_id, "adsb_hex": track["meta"].get("adsb_hex"), "arcs": replay_arcs(coverage, track)}
+            )
             return
         self._send(404, {"error": "not found"})
 
@@ -277,11 +334,12 @@ class ControlServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT, history=None):
+    def __init__(self, tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT, history=None, coverage=None):
         super().__init__((host, port), _Handler)
         self.tracker = tracker
         self.tracker_lock = tracker_lock
         self.history = history
+        self.coverage = coverage
         # Lets an open stream wind down on shutdown instead of holding the
         # process up for a full interval.
         self.stopping = threading.Event()
@@ -303,12 +361,12 @@ def _has_points(delta):
     return any(cols["t"] for cols in delta["detections"].values())
 
 
-def start_control_server(tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT, history=None):
+def start_control_server(tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT, history=None, coverage=None):
     """Serve the control surface on a daemon thread and return the server.
 
     The thread is a daemon so it never holds up interpreter shutdown: the
     tracker process is killed by its supervisor, not asked to wind down."""
-    server = ControlServer(tracker, tracker_lock, host=host, port=port, history=history)
+    server = ControlServer(tracker, tracker_lock, host=host, port=port, history=history, coverage=coverage)
     thread = threading.Thread(target=server.serve_forever, daemon=True, name="tracker-control")
     thread.start()
     server.thread = thread
