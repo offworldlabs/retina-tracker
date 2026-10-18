@@ -29,11 +29,21 @@ the forward geodesic. That matches retina-analytics' helpers rather than the tra
 - The detection carries blah2's ADS-B match (`detection["adsb"]`), and its `hex` equals the
   **track's** `adsb_hex`. A track keeps its hex after it swaps onto another target, so the
   detection's own tag is what proves the position belongs to this detection.
-- `position_age` is present and at most `coverage.max_position_age_s` (10 s). blah2 projects
+- `position_age` is present and at most `coverage.max_position_age_s` (20 s). blah2 projects
   each aircraft to the detection's timestamp before matching and reports how far it projected
   (`blah2-arm/api/lib/extrapolation.js`, `projectForMatch`). A missing age means blah2 could not
   bind the fix to the detection, so it is refused rather than trusted.
 - `lat`/`lon` are finite and in range.
+
+The limit is blah2's own projection cap (`MATCH_MAX_POSITION_AGE_S`), not a tighter one, because
+the age measures how far blah2 projected the fix, not how wrong the result is. It started at
+retina-server's 10 s, which is the right bound for an unprojected fix (2.5 km stale at 250 m/s)
+but refused 22% of correctly tagged detections in a test node's first 20 h: ADS-B arrives in
+batches about 8.6 s apart, so ages run in a sawtooth (median 8 s, 95th percentile 13.5 s, 20 s at
+most). Measured on the same node, as the jump in position when a fresh fix replaces a projected
+one, the projection error was a median 0.07-0.14 km and a 90th percentile of about 0.2 km at
+every age up to 20 s, against a 5 degree slice 1.7 km wide at 20 km. Ages over 12 s were rare (19
+samples), so this is worth rechecking on other nodes.
 
 The position is never the tracker's own estimate. The same rule decides the `lat`/`lon` that
 track points carry on `/events` (see `history.py`), so a trail on the map is drawn from exactly
@@ -71,6 +81,20 @@ evidence. Here each bin is drawn edge to edge.
 The constants (`min_pass_detections`, `max_position_age_s`, the second-best rule) have not yet
 been validated across sites. Check them against several nodes' recordings before relying on the
 wedge for anything beyond display.
+
+## The processed-range limit
+
+blah2 only searches delays up to its `delayMax` (bins, converted with the sample rate to a
+differential range; `config.DELAY_MAX_KM`). No detection can lie beyond the ellipse of that
+differential, so where the wedge reaches it, its reach is set by the node's configuration and
+says nothing about the antenna. On a test node with a short baseline, the main lobe's held
+ranges sat at 87-98% of that ellipse.
+
+`/coverage` therefore also serves `span_ring`, the ellipse at `max_differential_km`, and
+`limited`, per bin: true when the held range is at least `SPAN_LIMITED_FRACTION` (0.85) of the
+ellipse's range at the bin centre. The margin is there because traffic does not fly exactly to
+the edge and flat ranges sit a little inside it for aircraft at altitude. Both are empty when
+the node states no `delayMax`.
 
 ## Reset and persistence
 
@@ -115,7 +139,7 @@ an arc is about 3 KB, so a replay is up to roughly 750 KB.
 
 | Route | Returns |
 | --- | --- |
-| `GET /coverage` | `enabled`, `now_ms` (the node's clock, so a consumer can tell a full hold from a recent start without trusting its own), `geometry` (rx, tx, `baseline_km`), `bin_deg`, `hold_s`, `min_pass_detections`, `since_ms`, `reset_ms`, `reset_reason`, `held_km` (one per bin, 0 where unproven), `proven_bins`, `aircraft`, and `lobes`: rings of `[lat, lon]`, each starting and ending at the receiver. |
+| `GET /coverage` | `enabled`, `now_ms` (the node's clock, so a consumer can tell a full hold from a recent start without trusting its own), `geometry` (rx, tx, `baseline_km`), `bin_deg`, `hold_s`, `min_pass_detections`, `since_ms`, `reset_ms`, `reset_reason`, `held_km` (one per bin, 0 where unproven), `proven_bins`, `aircraft`, `lobes` (rings of `[lat, lon]`, each starting and ending at the receiver), `max_differential_km`, `span_ring` (closed ring of `[lat, lon]`, empty when unknown), `limited` (one bool per bin) and `limited_bins`. |
 | `GET /coverage/arcs?window=<s>` | `{"arcs": [{"id", "t", "delay", "arc"}]}`: the newest point's arc for each **unlabelled** track in the window. Labelled tracks are drawn from their positions instead. |
 | `GET /coverage/track/<id>` | `{"id", "adsb_hex", "arcs": [{"t", "delay", "arc"}]}` for the replay. 400 for an id outside `[A-Za-z0-9-]`, 404 when the track is not held. |
 | `POST /coverage/reset` | `{"ok": true}` |

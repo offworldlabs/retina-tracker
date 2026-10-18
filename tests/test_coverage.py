@@ -430,3 +430,52 @@ def test_coverage_routes_say_so_when_it_is_off():
     finally:
         server.shutdown()
         server.server_close()
+
+
+# ── fix age and the processed-range limit ───────────────────────────────────
+
+
+@pytest.mark.parametrize("age,kept", [(15.0, True), (20.0, True), (21.0, False)])
+def test_the_default_fix_age_matches_blah2s_projection_cap(age, kept):
+    det = detection(NOW, "abc123", 60.0, 30.0, age=age)
+    assert (verified_position(det, "abc123") is not None) is kept
+
+
+def spanned(max_differential_km=60.0):
+    return Coverage(
+        GEOMETRY,
+        bin_deg=5.0,
+        hold_s=86400,
+        min_pass_detections=3,
+        now_ms=NOW - DAY_MS,
+        max_differential_km=max_differential_km,
+    )
+
+
+def test_the_span_ring_is_the_ellipse_of_the_furthest_processed_differential():
+    ring = np.array(spanned().state(NOW)["span_ring"])
+    to_rx = ground_range_km(RX[0], RX[1], ring[:, 0], ring[:, 1])
+    to_tx = ground_range_km(TX[0], TX[1], ring[:, 0], ring[:, 1])
+    assert np.allclose(to_rx + to_tx - BASELINE_KM, 60.0, atol=0.05)
+    assert ring[0].tolist() == ring[-1].tolist()
+
+
+def test_a_slice_reaching_the_processed_range_is_marked_limited():
+    coverage = spanned()
+    span = coverage.span_km()
+    for i, bearing in ((12, 62.0), (14, 72.0)):
+        reach = span[i] * (0.95 if i == 12 else 0.5)
+        fly(coverage, f"a{i}", "aaa001", bearing, reach)
+        fly(coverage, f"b{i}", "aaa002", bearing, reach)
+    state = coverage.state(NOW)
+    assert state["limited"][12] is True
+    assert state["limited"][14] is False
+    assert state["limited_bins"] == 1
+    assert state["max_differential_km"] == 60.0
+
+
+def test_no_span_without_a_processed_range():
+    state = fresh().state(NOW)
+    assert state["span_ring"] == []
+    assert state["limited_bins"] == 0
+    assert state["max_differential_km"] is None

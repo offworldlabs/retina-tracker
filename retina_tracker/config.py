@@ -133,7 +133,7 @@ def load_config(config_path=None):
             "enabled": True,
             "bin_deg": 5.0,
             "hold_s": 86400,
-            "max_position_age_s": 10.0,
+            "max_position_age_s": 20.0,
             "min_pass_detections": 3,
         },
         "tcp": {
@@ -398,7 +398,7 @@ def COVERAGE_HOLD_S():
 
 
 def COVERAGE_MAX_POSITION_AGE_S():
-    return _get_param("coverage", "max_position_age_s", 10.0)
+    return _get_param("coverage", "max_position_age_s", 20.0)
 
 
 def COVERAGE_MIN_PASS_DETECTIONS():

@@ -31,6 +31,7 @@ ARC_QUANTUM_KM = 0.03
 ARC_CACHE_SIZE = 4096
 LOBE_STEP_DEG = 1.0
 HELD_REFRESH_MS = 10_000
+SPAN_LIMITED_FRACTION = 0.85
 HIGH_WATER_MEMORY = 512
 REPLAY_MAX_ARCS = 240
 SAVE_INTERVAL_S = 60
@@ -168,7 +169,16 @@ class Coverage:
     so every method that touches passes takes the lock.
     """
 
-    def __init__(self, geometry, bin_deg=None, hold_s=None, min_pass_detections=None, state_path=None, now_ms=None):
+    def __init__(
+        self,
+        geometry,
+        bin_deg=None,
+        hold_s=None,
+        min_pass_detections=None,
+        state_path=None,
+        now_ms=None,
+        max_differential_km=None,
+    ):
         self._lock = threading.Lock()
         self.geometry = geometry
         bin_deg = float(bin_deg or COVERAGE_BIN_DEG())
@@ -180,6 +190,7 @@ class Coverage:
         self.hold_s = float(hold_s or COVERAGE_HOLD_S())
         self.min_pass_detections = int(min_pass_detections or COVERAGE_MIN_PASS_DETECTIONS())
         self.state_path = state_path
+        self.max_differential_km = max_differential_km if _finite(max_differential_km) else None
         self._live = {}
         self._closed = []
         self._through = OrderedDict()
@@ -307,12 +318,36 @@ class Coverage:
             points.extend(_point(a, b) for a, b in zip(lat, lon))
         return points
 
+    def span_km(self):
+        """Per bin, the ground range at the bin centre of the furthest differential blah2 processes, or None."""
+        g, d = self.geometry, self.max_differential_km
+        if g is None or d is None or d <= 0:
+            return None
+        centres = (np.arange(self.n_bins) + 0.5) * self.bin_deg
+        return [float(r) for r in ellipse_range_km(d, g.baseline_km, centres - g.tx_bearing_deg)]
+
+    def span_ring(self):
+        """The processed-range limit as a closed [lat, lon] ring.
+
+        See docs/coverage-wedge.md#the-processed-range-limit.
+        """
+        g, d = self.geometry, self.max_differential_km
+        if g is None or d is None or d <= 0:
+            return []
+        bearings = np.arange(0.0, 360.0 + LOBE_STEP_DEG / 2, LOBE_STEP_DEG)
+        lat, lon = destination(
+            g.rx_lat, g.rx_lon, bearings, ellipse_range_km(d, g.baseline_km, bearings - g.tx_bearing_deg)
+        )
+        return [_point(a, b) for a, b in zip(lat, lon)]
+
     def state(self, now_ms=None):
         """Everything GET /coverage serves."""
         now = _now_ms() if now_ms is None else now_ms
         with self._lock:
             held, aircraft = self._held_bins(now)
             started, reset_ms, reason = self.started_ms, self.reset_ms, self.reset_reason
+        span = self.span_km()
+        limited = [bool(span and h > 0 and h >= SPAN_LIMITED_FRACTION * s) for h, s in zip(held, span or held)]
         return {
             "enabled": self.geometry is not None,
             "now_ms": now,
@@ -327,6 +362,10 @@ class Coverage:
             "proven_bins": sum(1 for h in held if h > 0),
             "aircraft": aircraft,
             "lobes": self.lobes(held),
+            "max_differential_km": self.max_differential_km,
+            "span_ring": self.span_ring(),
+            "limited": limited,
+            "limited_bins": sum(limited),
         }
 
     # ── Arcs ───────────────────────────────────────────────────

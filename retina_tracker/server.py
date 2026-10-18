@@ -6,7 +6,7 @@ import socket
 import sys
 import threading
 
-from .config import COVERAGE_ENABLED, LOCATION, get_config
+from .config import COVERAGE_ENABLED, DELAY_MAX_KM, LOCATION, get_config
 from .control import DEFAULT_HOST as CONTROL_HOST
 from .control import DEFAULT_PORT as CONTROL_PORT
 from .control import start_control_server
@@ -203,7 +203,7 @@ def run_tcp_server(
         geometry = Geometry.from_location(LOCATION())
         if geometry is None:
             print("Coverage wedge off: no receiver and transmitter location in config", file=sys.stderr)
-        coverage = Coverage(geometry, state_path=coverage_state_path)
+        coverage = Coverage(geometry, state_path=coverage_state_path, max_differential_km=DELAY_MAX_KM())
         coverage.load()
         start_saver(coverage)
 
