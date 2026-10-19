@@ -96,6 +96,24 @@ ellipse's range at the bin centre. The margin is there because traffic does not 
 the edge and flat ranges sit a little inside it for aircraft at altitude. Both are empty when
 the node states no `delayMax`.
 
+## Close-in slices
+
+Close to the receiver an aircraft can be high above the node while only a few kilometres away on
+the ground, so a flat map shows it as coverage on whatever bearing it happened to cross. On a test
+node's second day this proved small slices (1-8 km) in almost every direction, including straight
+away from the main lobe. Detections there sat at a median 45 degrees elevation outside the lobe,
+so they describe aircraft overhead, not the antenna's horizontal pattern.
+
+Filtering by elevation does not separate them cleanly: on a short-reach node with traffic 4-5 km
+up, the main lobe's own detections sit at a median 26-30 degrees. So slices are split by ground
+range instead. A slice whose held range is under `coverage.close_in_km` (10 km) is close-in: it
+stays proven and counted, but `/coverage` serves it in `close_lobes` rather than `lobes`, and
+flags it in `close_in`, so a consumer can draw it as close-in overhead traffic rather than as
+pattern. 10 km clears the furthest ring slice seen on that node (8.1 km); it also lightens two
+slices on the main lobe's near edge (8.8 and 9.8 km), which is acceptable since that evidence is
+short-range too. It was set from one site, so check it on others. Handling elevation properly is
+part two, the 3D wedge.
+
 ## Reset and persistence
 
 `POST /coverage/reset` clears every pass and records when and why (`reset_reason: manual`). It
@@ -139,7 +157,7 @@ an arc is about 3 KB, so a replay is up to roughly 750 KB.
 
 | Route | Returns |
 | --- | --- |
-| `GET /coverage` | `enabled`, `now_ms` (the node's clock, so a consumer can tell a full hold from a recent start without trusting its own), `geometry` (rx, tx, `baseline_km`), `bin_deg`, `hold_s`, `min_pass_detections`, `since_ms`, `reset_ms`, `reset_reason`, `held_km` (one per bin, 0 where unproven), `proven_bins`, `aircraft`, `lobes` (rings of `[lat, lon]`, each starting and ending at the receiver), `max_differential_km`, `span_ring` (closed ring of `[lat, lon]`, empty when unknown), `limited` (one bool per bin) and `limited_bins`. |
+| `GET /coverage` | `enabled`, `now_ms` (the node's clock, so a consumer can tell a full hold from a recent start without trusting its own), `geometry` (rx, tx, `baseline_km`), `bin_deg`, `hold_s`, `min_pass_detections`, `since_ms`, `reset_ms`, `reset_reason`, `held_km` (one per bin, 0 where unproven), `proven_bins`, `aircraft`, `lobes` (rings of `[lat, lon]`, each starting and ending at the receiver; slices at or beyond `close_in_km` only), `close_lobes` (the same, for the close-in slices), `close_in_km`, `close_in` (one bool per bin), `close_in_bins`, `max_differential_km`, `span_ring` (closed ring of `[lat, lon]`, empty when unknown), `limited` (one bool per bin) and `limited_bins`. |
 | `GET /coverage/arcs?window=<s>` | `{"arcs": [{"id", "t", "delay", "arc"}]}`: the newest point's arc for each **unlabelled** track in the window. Labelled tracks are drawn from their positions instead. |
 | `GET /coverage/track/<id>` | `{"id", "adsb_hex", "arcs": [{"t", "delay", "arc"}]}` for the replay. 400 for an id outside `[A-Za-z0-9-]`, 404 when the track is not held. |
 | `POST /coverage/reset` | `{"ok": true}` |

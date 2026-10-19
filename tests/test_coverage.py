@@ -479,3 +479,19 @@ def test_no_span_without_a_processed_range():
     assert state["span_ring"] == []
     assert state["limited_bins"] == 0
     assert state["max_differential_km"] is None
+
+
+def test_close_in_slices_are_served_apart_from_the_main_lobes():
+    coverage = fresh(close_in_km=8.0)
+    for bearing, reach in ((62.0, 30.0), (67.0, 30.0), (242.0, 5.0)):
+        fly(coverage, f"a{bearing}", "aaa001", bearing, reach)
+        fly(coverage, f"b{bearing}", "aaa002", bearing, reach)
+    state = coverage.state(NOW)
+    assert state["proven_bins"] == 3
+    assert state["close_in_bins"] == 1
+    assert state["close_in"][48] is True
+    assert state["close_in"][12] is False
+    [main] = state["lobes"]
+    [near] = state["close_lobes"]
+    assert np.allclose(ground_range_km(RX[0], RX[1], *np.array(main[1:-1]).T), 30.0, atol=0.01)
+    assert np.allclose(ground_range_km(RX[0], RX[1], *np.array(near[1:-1]).T), 5.0, atol=0.01)

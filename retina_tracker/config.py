@@ -135,6 +135,7 @@ def load_config(config_path=None):
             "hold_s": 86400,
             "max_position_age_s": 20.0,
             "min_pass_detections": 3,
+            "close_in_km": 10.0,
         },
         "tcp": {
             "host": "0.0.0.0",
@@ -399,6 +400,10 @@ def COVERAGE_HOLD_S():
 
 def COVERAGE_MAX_POSITION_AGE_S():
     return _get_param("coverage", "max_position_age_s", 20.0)
+
+
+def COVERAGE_CLOSE_IN_KM():
+    return _get_param("coverage", "close_in_km", 10.0)
 
 
 def COVERAGE_MIN_PASS_DETECTIONS():

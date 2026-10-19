@@ -17,6 +17,7 @@ import numpy as np
 
 from .config import (
     COVERAGE_BIN_DEG,
+    COVERAGE_CLOSE_IN_KM,
     COVERAGE_HOLD_S,
     COVERAGE_MAX_POSITION_AGE_S,
     COVERAGE_MIN_PASS_DETECTIONS,
@@ -175,6 +176,7 @@ class Coverage:
         bin_deg=None,
         hold_s=None,
         min_pass_detections=None,
+        close_in_km=None,
         state_path=None,
         now_ms=None,
         max_differential_km=None,
@@ -189,6 +191,7 @@ class Coverage:
         self.n_bins = int(round(360.0 / bin_deg))
         self.hold_s = float(hold_s or COVERAGE_HOLD_S())
         self.min_pass_detections = int(min_pass_detections or COVERAGE_MIN_PASS_DETECTIONS())
+        self.close_in_km = float(COVERAGE_CLOSE_IN_KM() if close_in_km is None else close_in_km)
         self.state_path = state_path
         self.max_differential_km = max_differential_km if _finite(max_differential_km) else None
         self._live = {}
@@ -348,6 +351,7 @@ class Coverage:
             started, reset_ms, reason = self.started_ms, self.reset_ms, self.reset_reason
         span = self.span_km()
         limited = [bool(span and h > 0 and h >= SPAN_LIMITED_FRACTION * s) for h, s in zip(held, span or held)]
+        close_in = [0 < h < self.close_in_km for h in held]
         return {
             "enabled": self.geometry is not None,
             "now_ms": now,
@@ -361,7 +365,11 @@ class Coverage:
             "held_km": [round(h, 2) for h in held],
             "proven_bins": sum(1 for h in held if h > 0),
             "aircraft": aircraft,
-            "lobes": self.lobes(held),
+            "lobes": self.lobes(tuple(0.0 if c else h for h, c in zip(held, close_in))),
+            "close_in_km": self.close_in_km,
+            "close_in": close_in,
+            "close_in_bins": sum(close_in),
+            "close_lobes": self.lobes(tuple(h if c else 0.0 for h, c in zip(held, close_in))),
             "max_differential_km": self.max_differential_km,
             "span_ring": self.span_ring(),
             "limited": limited,
