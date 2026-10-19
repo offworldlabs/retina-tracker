@@ -152,7 +152,9 @@ class Pass:
     @classmethod
     def from_list(cls, row):
         hex_, bin_, n, first_ms, last_ms, range_km = row
-        return cls(str(hex_), int(bin_), int(n), int(first_ms), int(last_ms), float(range_km))
+        if not isinstance(hex_, str) or not all(_finite(v) for v in (bin_, n, first_ms, last_ms, range_km)):
+            raise ValueError(f"malformed pass {row!r}")
+        return cls(hex_, int(bin_), int(n), int(first_ms), int(last_ms), float(range_km))
 
 
 def _point(lat, lon):
@@ -202,8 +204,7 @@ class Coverage:
         self.reset_reason = None
         self._held = None
         self._arcs = OrderedDict()
-
-    # ── Recording ──────────────────────────────────────────────
+        self._save_lock = threading.Lock()
 
     def write_event(self, track_id, timestamp, length, detections, adsb_hex=None, **_unused):
         """The tracker's event-writer duck type. Each event repeats a window, so a high-water mark dedupes it."""
@@ -257,8 +258,6 @@ class Coverage:
         self.reset_reason = reason
         self._held = None
         self._arcs = OrderedDict()
-
-    # ── The wedge ──────────────────────────────────────────────
 
     def _prune(self, now):
         cutoff = now - self.hold_s * 1000
@@ -376,8 +375,6 @@ class Coverage:
             "limited_bins": sum(limited),
         }
 
-    # ── Arcs ───────────────────────────────────────────────────
-
     def arc(self, differential_km, now_ms=None):
         """The delay ellipse as {"solid": [...], "faint": [...]} polylines, or None.
 
@@ -436,8 +433,6 @@ class Coverage:
             emit(kind1, cross, points[k + 1])
         return out
 
-    # ── Persistence ────────────────────────────────────────────
-
     def to_dict(self):
         with self._lock:
             return {
@@ -451,15 +446,17 @@ class Coverage:
             }
 
     def save(self):
+        """Write the state atomically. The snapshot is taken under the save lock, so a later save always wins."""
         if not self.state_path:
             return
         tmp = self.state_path + ".tmp"
-        try:
-            with open(tmp, "w") as f:
-                json.dump(self.to_dict(), f, separators=(",", ":"))
-            os.replace(tmp, self.state_path)
-        except OSError as e:
-            print(f"Could not save coverage to {self.state_path}: {e}", file=sys.stderr)
+        with self._save_lock:
+            try:
+                with open(tmp, "w") as f:
+                    json.dump(self.to_dict(), f, separators=(",", ":"))
+                os.replace(tmp, self.state_path)
+            except OSError as e:
+                print(f"Could not save coverage to {self.state_path}: {e}", file=sys.stderr)
 
     def load(self, now_ms=None):
         """Restore saved passes, or start again when they were held under another geometry."""
@@ -467,9 +464,7 @@ class Coverage:
         if not self.state_path or not os.path.exists(self.state_path):
             return
         try:
-            with open(self.state_path) as f:
-                saved = json.load(f)
-            passes = [Pass.from_list(row) for row in saved.get("passes", [])]
+            saved, passes = _read_state(self.state_path)
         except (OSError, ValueError, TypeError) as e:
             print(f"Ignoring unreadable coverage state {self.state_path}: {e}", file=sys.stderr)
             return
@@ -483,10 +478,27 @@ class Coverage:
                 self._clear("geometry", now)
                 return
             self._closed = [p for p in passes if 0 <= p.bin < self.n_bins]
-            self.started_ms = int(saved.get("started_ms") or now)
-            self.reset_ms = saved.get("reset_ms")
+            self.started_ms = int(saved["started_ms"]) if saved.get("started_ms") is not None else now
+            self.reset_ms = None if saved.get("reset_ms") is None else int(saved["reset_ms"])
             self.reset_reason = saved.get("reset_reason")
             self._prune(now)
+
+
+def _read_state(path):
+    """The saved state, validated whole. Anything malformed raises, so a damaged file is never trusted in part."""
+    with open(path) as f:
+        saved = json.load(f)
+    if not isinstance(saved, dict):
+        raise ValueError("not a JSON object")
+    passes = saved.get("passes", [])
+    if not isinstance(passes, list):
+        raise ValueError("passes is not a list")
+    for key in ("started_ms", "reset_ms"):
+        if saved.get(key) is not None and not _finite(saved[key]):
+            raise ValueError(f"{key} is not a number")
+    if saved.get("reset_reason") is not None and not isinstance(saved["reset_reason"], str):
+        raise ValueError("reset_reason is not text")
+    return saved, [Pass.from_list(row) for row in passes]
 
 
 def replay_arcs(coverage, track, now_ms=None):

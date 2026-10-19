@@ -59,7 +59,10 @@ The unit of evidence is a **pass**: one track's verified detections in one beari
 (`coverage.bin_deg`, 5 degrees). A pass records its aircraft hex, detection count, first and
 last time, and the furthest ground range it reached. Positions under 0.5 km from the receiver
 are dropped as uninformative. Each event repeats a window of recent detections, so the recorder
-keeps a per-track high-water mark and counts each detection once.
+keeps a per-track high-water mark and counts each detection once. A detection that arrives older
+than the mark is dropped, as the history drops it. The mark is remembered for the 512 most recently
+emitting tracks, the same bound `TrackEventWriter` uses; a track evicted from it while still
+emitting could have a window counted twice, which needs more than 512 tracks emitting at once.
 
 A pass counts once it has `coverage.min_pass_detections` (3) detections, so one blip cannot move
 a boundary. For each bin, the held range is the **second-best** range among distinct aircraft:
@@ -117,14 +120,28 @@ part two, the 3D wedge.
 ## Reset and persistence
 
 `POST /coverage/reset` clears every pass and records when and why (`reset_reason: manual`). It
-does not touch tracking or the history. The wedge also starts again, with reason `geometry`, when
+does not touch tracking or the history. Like `POST /reset`, it is unauthenticated and trusted
+because the control surface binds to loopback; anything that can reach it can already reset the
+tracker. The wedge also starts again, with reason `geometry`, when
 it is loaded under a receiver or transmitter position other than the one it was built under, and
 with reason `format` when the saved schema or bin width differs.
 
 The state is saved to `coverage.json` beside the `-s` events file (override with
 `--coverage-state`; memory only when events go to stdout), every 60 s and on reset, written to a
 temporary file and renamed so a crash cannot leave half a file. A restart therefore loses at most
-a minute of passes, unlike `events.jsonl`, which a restart truncates.
+a minute of passes, unlike `events.jsonl`, which a restart truncates. There is deliberately no
+save on shutdown: a minute out of a 24 h hold is not worth changing how the tracker is stopped.
+
+Saves are serialised by a save lock, and each takes its snapshot inside it. The saver thread and a
+reset on an HTTP thread both save, and without this a save that snapshotted before a reset could
+write after it, so the file on disk ended as the wedge before the reset and a restart brought the
+reset evidence back.
+
+A state file is validated whole before anything in it is used (`_read_state`): it must be a JSON
+object, its passes well-formed with finite numbers, and its times numbers. A file that fails in
+any way is ignored and the wedge starts fresh; it is never trusted in part. `load()` runs at
+startup, so before this a damaged file raised there and, under `restart: always`, put the tracker
+into a crash loop until someone deleted the file.
 
 `since_ms` in the state is the start of the evidence the wedge can hold: the later of 24 h ago
 and the last reset (or the moment a fresh state began).

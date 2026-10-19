@@ -495,3 +495,94 @@ def test_close_in_slices_are_served_apart_from_the_main_lobes():
     [near] = state["close_lobes"]
     assert np.allclose(ground_range_km(RX[0], RX[1], *np.array(main[1:-1]).T), 30.0, atol=0.01)
     assert np.allclose(ground_range_km(RX[0], RX[1], *np.array(near[1:-1]).T), 5.0, atol=0.01)
+
+
+# ── a damaged state file, and saves that overlap ────────────────────────────
+
+
+def saved_state(**overrides):
+    state = {
+        "schema": 1,
+        "geometry": GEOMETRY.key(),
+        "bin_deg": 5.0,
+        "started_ms": NOW - 1000,
+        "reset_ms": None,
+        "reset_reason": None,
+        "passes": [["aaa001", 12, 3, NOW - 5000, NOW - 3000, 30.0], ["aaa002", 12, 3, NOW - 5000, NOW - 3000, 50.0]],
+    }
+    state.update(overrides)
+    return json.dumps(state)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "[1, 2, 3]",
+        '"a string"',
+        "null",
+        saved_state(started_ms="soon"),
+        saved_state(reset_ms="yesterday"),
+        saved_state(reset_reason=7),
+        saved_state(passes={"not": "a list"}),
+        saved_state(passes=[["aaa001", 12, 3, NOW - 5000, NOW - 3000, "far"]]),
+        saved_state(passes=[["aaa001", 12, 3, NOW - 5000, NOW - 3000]]),
+        saved_state(passes=[[12, 12, 3, NOW - 5000, NOW - 3000, 30.0]]),
+        saved_state().replace("50.0", "NaN"),
+        saved_state().replace("50.0", "Infinity"),
+    ],
+)
+def test_a_damaged_state_file_starts_the_wedge_again_instead_of_crashing(tmp_path, content):
+    """load() runs at startup, so anything it raises is a crash loop under restart: always."""
+    path = tmp_path / "coverage.json"
+    path.write_text(content)
+    coverage = fresh(state_path=str(path))
+    coverage.load(NOW)
+    state = coverage.state(NOW)
+    assert state["proven_bins"] == 0
+    json.dumps(state, allow_nan=False)
+
+
+def test_a_good_state_file_still_loads(tmp_path):
+    path = tmp_path / "coverage.json"
+    path.write_text(saved_state())
+    coverage = fresh(state_path=str(path))
+    coverage.load(NOW)
+    assert coverage.held(NOW)[12] == pytest.approx(30.0)
+
+
+def test_a_reset_during_a_save_is_what_ends_up_on_disk(tmp_path, monkeypatch):
+    """The saver thread and a reset both save. Whichever order they land in, the file must end
+    as the reset left it, whole, and never as the older snapshot."""
+    import retina_tracker.coverage as coverage_module
+
+    path = str(tmp_path / "coverage.json")
+    coverage = fresh(state_path=path)
+    fly(coverage, "t1", "aaa001", 62.0, 30.0)
+    fly(coverage, "t2", "aaa002", 62.0, 50.0)
+
+    in_dump, release = threading.Event(), threading.Event()
+    real_dump = json.dump
+
+    def slow_first_dump(obj, f, **kwargs):
+        if not in_dump.is_set():
+            in_dump.set()
+            release.wait(5)
+        return real_dump(obj, f, **kwargs)
+
+    monkeypatch.setattr(coverage_module.json, "dump", slow_first_dump)
+    saver = threading.Thread(target=coverage.save)
+    saver.start()
+    assert in_dump.wait(5)
+    resetter = threading.Thread(target=coverage.reset, kwargs={"now_ms": NOW})
+    resetter.start()
+    resetter.join(0.5)
+    release.set()
+    saver.join(5)
+    resetter.join(5)
+    monkeypatch.setattr(coverage_module.json, "dump", real_dump)
+
+    with open(path) as f:
+        on_disk = json.load(f)
+    assert on_disk["reset_reason"] == "manual"
+    assert on_disk["passes"] == []
+    assert not (tmp_path / "coverage.json.tmp").exists()
