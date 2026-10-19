@@ -16,7 +16,9 @@ Storage
 four floats costs about 192 bytes once the list slot, the tuple header and four
 boxed floats are counted; the same point here is 20, so a buffer that would
 have been 83 MB is 8.7. Columns are also what goes on the wire, so serving a
-snapshot is a slice rather than a transposition.
+snapshot is a slice rather than a transposition. Track point-sets also carry
+each point's verified ADS-B position as float32 lat/lon, 28 bytes a point,
+null on the wire where unverified (docs/coverage-wedge.md).
 
 Bounded twice over. The time window is the point of the thing, but a window
 alone makes memory a function of how busy the sky is, which is not something a
@@ -36,9 +38,12 @@ consumers take a fresh snapshot rather than trying to reconcile.
 """
 
 import bisect
+import math
 import threading
 import time
 from array import array
+
+from .coverage import verified_position
 
 WINDOW_S = 4 * 3600
 
@@ -65,6 +70,7 @@ CLASSES = (ASSOCIATED, UNASSOCIATED, BELOW_SNR)
 DELAY_DP = 2
 DOPPLER_DP = 2
 SNR_DP = 1
+POSITION_DP = 5
 
 
 def _columns():
@@ -72,11 +78,26 @@ def _columns():
     return {"t": array("q"), "delay": array("f"), "doppler": array("f"), "snr": array("f")}
 
 
+def _track_columns():
+    """A track's point-set, plus the verified ADS-B position of each point (NaN where none)."""
+    return dict(_columns(), lat=array("f"), lon=array("f"))
+
+
 def _append(cols, timestamp, delay, doppler, snr):
     cols["t"].append(int(timestamp))
     cols["delay"].append(delay)
     cols["doppler"].append(doppler)
     cols["snr"].append(snr)
+
+
+def _append_position(cols, position):
+    lat, lon = position if position is not None else (math.nan, math.nan)
+    cols["lat"].append(lat)
+    cols["lon"].append(lon)
+
+
+def _rounded_or_none(values, dp):
+    return [None if math.isnan(v) else round(v, dp) for v in values]
 
 
 def _drop_front(cols, n):
@@ -88,13 +109,17 @@ def _drop_front(cols, n):
 
 
 def _slice(cols, start):
-    """The wire form of cols[start:], rounded."""
-    return {
+    """The wire form of cols[start:], rounded. Track sets carry lat/lon, null where unverified."""
+    out = {
         "t": list(cols["t"][start:]),
         "delay": [round(v, DELAY_DP) for v in cols["delay"][start:]],
         "doppler": [round(v, DOPPLER_DP) for v in cols["doppler"][start:]],
         "snr": [round(v, SNR_DP) for v in cols["snr"][start:]],
     }
+    if "lat" in cols:
+        out["lat"] = _rounded_or_none(cols["lat"][start:], POSITION_DP)
+        out["lon"] = _rounded_or_none(cols["lon"][start:], POSITION_DP)
+    return out
 
 
 def _first_at_or_after(times, cutoff_ms):
@@ -172,7 +197,7 @@ class DetectionHistory:
             if cols is None:
                 if len(self._tracks) >= self.max_tracks:
                     self._evict_oldest_track()
-                cols = self._tracks[track_id] = _columns()
+                cols = self._tracks[track_id] = _track_columns()
                 self._track_dropped[track_id] = 0
 
             last = self._track_last_ts.get(track_id)
@@ -181,6 +206,7 @@ class DetectionHistory:
                 if last is not None and ts <= last:
                     continue
                 _append(cols, ts, det["delay"], det["doppler"], det.get("snr", 0.0))
+                _append_position(cols, verified_position(det, adsb_hex))
                 last = ts if last is None or ts > last else last
             if last is not None:
                 self._track_last_ts[track_id] = last
@@ -334,6 +360,28 @@ class DetectionHistory:
             payload = {"gen": self._gen, "detections": detections, "tracks": tracks}
             return payload, self._cursor()
 
+    def track(self, track_id):
+        """One track's points in wire form, with its meta, or None if not held."""
+        with self._lock:
+            cols = self._tracks.get(track_id)
+            if cols is None:
+                return None
+            return dict(_slice(cols, 0), meta=self._track_meta.get(track_id, {}))
+
+    def latest(self, window_s=None, now_ms=None):
+        """(track_id, timestamp, delay, adsb_hex) of each track's newest point inside the window."""
+        if now_ms is None:
+            now_ms = int(time.time() * 1000)
+        with self._lock:
+            cutoff = None if window_s is None else now_ms - window_s * 1000
+            out = []
+            for tid, cols in self._tracks.items():
+                if not cols["t"] or (cutoff is not None and cols["t"][-1] < cutoff):
+                    continue
+                meta = self._track_meta.get(tid, {})
+                out.append((tid, cols["t"][-1], round(cols["delay"][-1], DELAY_DP), meta.get("adsb_hex")))
+            return out
+
     # ── Introspection ──────────────────────────────────────────
 
     def stats(self):
@@ -347,8 +395,8 @@ class DetectionHistory:
                 "tracks": len(self._tracks),
                 "track_points": track_points,
                 "points": points,
-                # 20 bytes a point: an int64 and three float32s.
-                "approx_bytes": points * 20,
+                # 20 bytes a detection point (an int64 and three float32s), 28 a track point with its position.
+                "approx_bytes": sum(per_class.values()) * 20 + track_points * 28,
             }
 
 
