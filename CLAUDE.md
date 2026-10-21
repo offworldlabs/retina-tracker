@@ -133,7 +133,7 @@ Use Claude in Chrome (browser automation) to verify:
 Tests are located in the `tests/` directory:
 - `test_geometry.py` - Coordinate conversion and geometry functions
 - `test_adsb_features.py` - ADS-B tracking features
-- `test_blank_occlusion.py` - Holding tracks through blah2's zero-Doppler blank
+- `test_blank_crossing.py` - Targets crossing blah2's zero-Doppler blank end one track and start another
 - `test_measurement_noise.py` - Measured measurement noise and its SNR scaling
 - `test_coverage.py` - The ADS-B-proven coverage wedge, its arcs and endpoints (`docs/coverage-wedge.md`)
 

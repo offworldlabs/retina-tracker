@@ -202,8 +202,9 @@ confident wrong answers at 2 frames per second. To repeat the 11 October fit:
 4. **Fit `Q` by replay.** With `R` fixed, run each aircraft track's own detections
    through the filter offline over a grid of process noise, and keep the `Q` whose
    median NIS sits at 2 ln 2 = 1.39 across prediction intervals. Use the record's
-   `interval`, the true time since that track's previous update; `dt` and
-   `n_missed` miss frames held through the zero-Doppler blank.
+   `interval`, the true time since that track's previous update. On recordings
+   made while tracks were held through the zero-Doppler blank (5-19 October
+   2026), `dt` and `n_missed` miss the held frames.
 5. **Validate by replay** of every node's recorded history before shipping.
 
 The scripts used on 11 October are kept with the dataset in the git-ignored
@@ -283,6 +284,11 @@ marginal: one has a 454 m jump between consecutive detections, which the gate is
 right to refuse; one is three detections over one second, too short to confirm;
 one is six sparse detections whose Doppler changes fast, which is stitching's job.
 Labels come from the run made by B, which slightly favours B.
+
+Every replay here ran with tracks held through the zero-Doppler blank, which was
+removed on 19 October 2026. The crossings row and the a7e1d3 crossing above
+describe that version; crossings are now joined by stitching
+(docs/zero-doppler-blank.md).
 
 **The synthetic harness cannot validate this `R`.** Its noise was fitted to ADS-B
 residuals and runs at about 1.3 delay cells with heavy tails, roughly nine times

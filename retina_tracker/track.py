@@ -7,9 +7,6 @@ from enum import Enum
 import numpy as np
 
 from .config import (
-    DOPPLER_BIN_HZ,
-    DOPPLER_BLANK_HZ,
-    GATE_THRESHOLD,
     INITIAL_RANGE_ACCEL_VARIANCE,
     M_THRESHOLD,
     MEASUREMENT_NOISE_DELAY_KM2,
@@ -21,12 +18,10 @@ from .config import (
     PROCESS_NOISE_MAX_SCALE,
     PROCESS_NOISE_NIS_MEMORY,
     SHADOW_MIN_FRACTION,
-    WAVELENGTH_KM,
 )
-from .kalman import MEASUREMENT_DIM, doppler_to_range_rate, range_rate_to_doppler
+from .kalman import MEASUREMENT_DIM, doppler_to_range_rate
 
 TRACK_HISTORY_MAX = 600
-MAX_OCCLUDED_S = 120.0
 
 
 class TrackState(Enum):
@@ -103,9 +98,6 @@ class Track:
         self.n_frames = 1
         self.n_associated = 0
         self.n_missed = 0
-        self.occluded_s = 0.0
-        self.blanked = False
-        self.last_doppler = detection["doppler"]
         self.last_update_ms = timestamp
         self.n_observations = 1
         self.nis_ema = float(MEASUREMENT_DIM)
@@ -242,8 +234,8 @@ class Track:
         # innovation was measured against, and by the end of this method it is
         # gone.
         self.last_n_missed = self.n_missed
-        # The true prediction interval. n_missed cannot give it: frames held
-        # through the zero-Doppler blank are not counted as misses.
+        # The true prediction interval, from timestamps rather than n_missed,
+        # which assumes every frame gap was the nominal one.
         self.last_interval_s = (timestamp - self.last_update_ms) / 1000.0
 
         # Capture ADS-B hex on first association that carries one.  Tracks
@@ -269,9 +261,6 @@ class Track:
 
         self.n_associated += 1
         self.n_missed = 0
-        self.occluded_s = 0.0
-        self.blanked = False
-        self.last_doppler = detection["doppler"]
         self.last_update_ms = timestamp
         self.n_frames += 1
 
@@ -286,15 +275,8 @@ class Track:
         self.max_velocity_ms = max(self.max_velocity_ms, floor_ms)
 
     def mark_missed(self, timestamp, frame=0):
-        """Mark track as not associated this frame.
-
-        A miss the zero-Doppler blank explains is not counted towards deletion.
-        """
-        if self.is_occluded():
-            self.blanked = self.blanked or self._predicted_through_blank()
-            self.occluded_s += self.last_dt or 0.0
-        else:
-            self.n_missed += 1
+        """Mark track as not associated this frame."""
+        self.n_missed += 1
         self.n_frames += 1
 
         self.history["timestamps"].append(timestamp)
@@ -304,31 +286,6 @@ class Track:
         self.history["state_status"].append(self.state_status.name)
 
         self.death_timestamp = timestamp
-
-    def is_occluded(self):
-        """Whether blah2's zero-Doppler blank can explain a confirmed track going undetected.
-
-        Once the prediction has entered or crossed the blank this latches until the next
-        association: when the target leaves the blank depends on an acceleration too poorly
-        estimated going in to trust. See docs/zero-doppler-blank.md.
-        """
-        if DOPPLER_BLANK_HZ() is None or self.state_status == TrackState.TENTATIVE:
-            return False
-        if self.blanked or self._predicted_through_blank():
-            return True
-        reach = np.sqrt(GATE_THRESHOLD() * self.covariance[1, 1]) / WAVELENGTH_KM()
-        return abs(range_rate_to_doppler(self.state[1])) - reach < self._blank_edge_hz()
-
-    def max_occluded_s(self):
-        """A track is held no longer than it was observed: extrapolating further is a guess."""
-        return min(MAX_OCCLUDED_S, (self.last_update_ms - self.birth_timestamp) / 1000.0)
-
-    def _blank_edge_hz(self):
-        return DOPPLER_BLANK_HZ() + DOPPLER_BIN_HZ()
-
-    def _predicted_through_blank(self):
-        doppler = range_rate_to_doppler(self.state[1])
-        return abs(doppler) < self._blank_edge_hz() or (doppler > 0) != (self.last_doppler > 0)
 
     def get_predicted_measurement(self):
         return self.kf.H @ self.state
@@ -416,7 +373,7 @@ class Track:
         if self.state_status == TrackState.TENTATIVE:
             return self.n_frames > N_WINDOW()
         else:
-            return self.n_missed > N_DELETE() or self.occluded_s > self.max_occluded_s()
+            return self.n_missed > N_DELETE()
 
     def get_length_bucket(self):
         if self.n_associated < 10:
