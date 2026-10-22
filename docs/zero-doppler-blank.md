@@ -26,7 +26,7 @@ under 0.1 km, because the range is at an extremum.
 Nothing special. A confirmed track that stops being detected is deleted after
 `n_delete` missed frames, inside the blank or not, and the target starts a new
 track when it reappears on the far side. Joining the two is stitching's job, not
-the filter's: for ADS-B aircraft, by their ICAO hex (see "Stitching" below).
+the filter's: for ADS-B aircraft, by their ICAO hex (docs/stitching.md).
 Aircraft without ADS-B show as two tracks per crossing until the physics-based
 stitch is designed.
 
@@ -114,7 +114,8 @@ This serves two separate goals.
    broke it. The hex is used rather than the callsign because it is the stable
    identifier and the one the tracker stores. **This is the zero-crossing stitch:**
    when a new track forms on the far side of the blank with the same hex, the two
-   are stitched.
+   are stitched. Implemented for any consecutive fragments of one hex, crossing or
+   not; see docs/stitching.md.
 2. **The filter only has to model well-constrained physics.** It should not
    widen its gates or process noise to survive a dramatic change of velocity or
    direction. When an aircraft does that, the track may break, and stitching
@@ -131,9 +132,7 @@ What it has to get right: a join between two different aircraft, or between an
 aircraft and a CW-tone track, is worse than leaving the fragments apart. Each
 fragment keeps its own track id, so fragmentation stays measurable and the event
 writer's per-id bookkeeping stays sound (PR #31); a stitch adds a link between
-ids. retina-gui has no notion of a link yet: it treats one id as one aircraft.
-Today only dead tracks are merged (`Tracker._merge_tracks`: 5 s, 5 km, 50 Hz),
-internally, and a merge is never emitted.
+ids, `stitch_id`. The contract and what is not yet done are in docs/stitching.md.
 
 **Evidence for the physics stitch.** With the hold off, a fragment's range rate
 and acceleration fitted over its last 10 s, and the next fragment's over its

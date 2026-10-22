@@ -64,6 +64,7 @@ class Track:
 
     def __init__(self, detection, timestamp, kf, frame=0, config=None):
         self.id = None
+        self.stitch_id = None
         # Before state_status: its setter latches ever_confirmed.
         self.ever_confirmed = False
         self.retired = False
@@ -83,6 +84,7 @@ class Track:
             _det_hex = detection["adsb"].get("hex")
             if _det_hex and isinstance(_det_hex, str):
                 self.adsb_hex = _det_hex
+        self.n_labelled = 1 if self.adsb_hex else 0
 
         _hist_max = (
             int(config.get("tracker", {}).get("track_history_max", TRACK_HISTORY_MAX)) if config else TRACK_HISTORY_MAX
@@ -246,6 +248,8 @@ class Track:
             if self._validate_adsb_data(adsb) and adsb.get("hex"):
                 self.adsb_hex = adsb["hex"]
                 self.adsb_initialized = True
+        if _det_adsb and _det_adsb.get("hex") == self.adsb_hex:
+            self.n_labelled += 1
 
         self.n_observations += 1
         if detection.get("shadowed"):
@@ -433,6 +437,7 @@ class Track:
 
         return {
             "id": self.id,
+            "stitch_id": self.stitch_id or self.id,
             "adsb_hex": self.adsb_hex,
             "adsb_initialized": self.adsb_initialized,
             "state_status": self.state_status.name,

@@ -174,6 +174,7 @@ class DetectionHistory:
         length,
         detections,
         adsb_hex=None,
+        stitch_id=None,
         is_anomalous=False,
         anomaly_types=None,
         max_velocity_ms=0.0,
@@ -213,6 +214,7 @@ class DetectionHistory:
 
             self._track_meta[track_id] = {
                 "adsb_hex": adsb_hex,
+                "stitch_id": stitch_id or track_id,
                 "length": length,
                 "max_velocity_ms": round(max_velocity_ms or 0.0, 1),
                 "is_anomalous": bool(is_anomalous),

@@ -81,6 +81,7 @@ class TrackEventWriter:
         detections,
         adsb_hex=None,
         adsb_initialized=False,
+        stitch_id=None,
         is_anomalous=False,
         max_velocity_ms=0.0,
         anomaly_types=None,
@@ -95,6 +96,7 @@ class TrackEventWriter:
 
         event = {
             "track_id": track_id,
+            "stitch_id": stitch_id or track_id,
             "adsb_hex": adsb_hex,
             "adsb_initialized": adsb_initialized,
             "timestamp": timestamp,

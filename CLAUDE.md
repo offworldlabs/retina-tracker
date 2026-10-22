@@ -135,6 +135,7 @@ Tests are located in the `tests/` directory:
 - `test_adsb_features.py` - ADS-B tracking features
 - `test_blank_crossing.py` - Targets crossing blah2's zero-Doppler blank end one track and start another
 - `test_measurement_noise.py` - Measured measurement noise and its SNR scaling
+- `test_stitching.py` - Linking an ADS-B aircraft's fragments into one chain by `stitch_id` (`docs/stitching.md`)
 - `test_coverage.py` - The ADS-B-proven coverage wedge, its arcs and endpoints (`docs/coverage-wedge.md`)
 
 All tests must pass before committing.
