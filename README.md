@@ -118,6 +118,13 @@ Each line is a self-contained track update:
 - `length`: Total detections associated with this track
 - `detections`: Detections not already written for this track. A track's first event carries every detection it took before it was confirmed, up to 20, the one that started it included
 
+### Outside store (`--outside-store`)
+
+In `--tcp` mode, every confirmed track that took a detection beyond ±300 Hz is kept with its
+neighbouring detections in `outside_tracks.sqlite` beside the `-s` events file, capped at
+`--outside-max-mb` (256) with the oldest dropped first. Read it from the control surface with
+`GET /outside` and `GET /outside/<id>`. See [docs/outside-store.md](docs/outside-store.md).
+
 ### Tracks JSON (`-o` flag)
 
 Complete track history for offline analysis.

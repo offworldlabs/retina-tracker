@@ -22,6 +22,7 @@ from .config import (
 from .kalman import MEASUREMENT_DIM, doppler_to_range_rate
 
 TRACK_HISTORY_MAX = 600
+OUTSIDE_DOPPLER_HZ = 300.0
 
 
 class TrackState(Enum):
@@ -117,6 +118,9 @@ class Track:
 
         self.max_velocity_ms = 0.0
         self._observe_speed_floor(detection)
+        self.n_outside = 0
+        self.peak_doppler_hz = detection["doppler"]
+        self._observe_doppler(detection)
 
     @staticmethod
     def _validate_adsb_data(adsb):
@@ -272,6 +276,15 @@ class Track:
         self.death_timestamp = timestamp
 
         self._observe_speed_floor(detection)
+        self._observe_doppler(detection)
+
+    def _observe_doppler(self, detection):
+        """Count detections beyond the outside-store limit and keep the largest |Doppler| (docs/outside-store.md)."""
+        doppler = detection["doppler"]
+        if abs(doppler) > OUTSIDE_DOPPLER_HZ:
+            self.n_outside += 1
+        if abs(doppler) > abs(self.peak_doppler_hz):
+            self.peak_doppler_hz = doppler
 
     def _observe_speed_floor(self, detection):
         """Bistatic range rate never exceeds twice the target's speed, so |range rate| / 2 floors it in any geometry."""

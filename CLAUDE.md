@@ -137,6 +137,7 @@ Tests are located in the `tests/` directory:
 - `test_measurement_noise.py` - Measured measurement noise and its SNR scaling
 - `test_stitching.py` - Linking an ADS-B aircraft's fragments into one chain by `stitch_id` (`docs/stitching.md`)
 - `test_coverage.py` - The ADS-B-proven coverage wedge, its arcs and endpoints (`docs/coverage-wedge.md`)
+- `test_outside_store.py` - Tracks beyond ±300 Hz kept on disk with the detections near them: trigger, settling, the neighbour tube, roll-over, corruption and the routes (`docs/outside-store.md`)
 
 All tests must pass before committing.
 

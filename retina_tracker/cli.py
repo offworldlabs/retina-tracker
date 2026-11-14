@@ -16,8 +16,11 @@ from .config import (
     set_config,
 )
 from .output import InnovationWriter, TrackEventWriter
+from .outside import MAX_BYTES as OUTSIDE_MAX_BYTES
 from .server import run_tcp_server
 from .tracker import UNBOUNDED_ARCHIVE, Tracker
+
+OUTSIDE_FILE = "outside_tracks.sqlite"
 
 
 def load_detections(filepath):
@@ -179,12 +182,18 @@ def visualize_tracks(
     print(f"Saved visualization to {output_image}", file=sys.stderr)
 
 
-def coverage_state_path(args):
-    if args.coverage_state:
-        return args.coverage_state
+def _beside_events(args, name):
     if args.stream_output and args.stream_output != "-":
-        return os.path.join(os.path.dirname(os.path.abspath(args.stream_output)), "coverage.json")
+        return os.path.join(os.path.dirname(os.path.abspath(args.stream_output)), name)
     return None
+
+
+def coverage_state_path(args):
+    return args.coverage_state or _beside_events(args, "coverage.json")
+
+
+def outside_store_path(args):
+    return args.outside_store or _beside_events(args, OUTSIDE_FILE)
 
 
 def main():
@@ -257,6 +266,19 @@ def main():
         help="Where the coverage wedge is saved across restarts "
         "(default: coverage.json beside the -s events file; memory only when -s is stdout or absent).",
     )
+    parser.add_argument(
+        "--outside-store",
+        type=str,
+        help="SQLite file keeping every confirmed track that went beyond +/-300 Hz "
+        f"(default: {OUTSIDE_FILE} beside the -s events file; no store when -s is stdout or absent).",
+    )
+    parser.add_argument(
+        "--outside-max-mb",
+        type=int,
+        default=OUTSIDE_MAX_BYTES // (1024 * 1024),
+        help="Stored size past which the oldest outside records are dropped "
+        f"(default: {OUTSIDE_MAX_BYTES // (1024 * 1024)}).",
+    )
 
     args = parser.parse_args()
 
@@ -316,6 +338,8 @@ def main():
             history_max_points=args.history_max_points,
             innovation_writer=innovation_writer,
             coverage_state_path=coverage_state_path(args),
+            outside_store_path=outside_store_path(args),
+            outside_max_bytes=args.outside_max_mb * 1024 * 1024,
         )
     else:
         tracker = process_detections(

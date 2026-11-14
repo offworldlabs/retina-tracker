@@ -92,6 +92,7 @@ class Tracker:
         detection_sink=None,
         max_pending_classification_frames=MAX_PENDING_CLASSIFICATION_FRAMES,
         innovation_writer=None,
+        retire_sink=None,
     ):
         self.kf = KalmanFilter()
         self.tracks = []
@@ -111,6 +112,8 @@ class Tracker:
         # calibrated from what the filter actually predicted. None costs
         # nothing: no record is built rather than built and dropped.
         self.innovation_writer = innovation_writer
+        # Optional. Told about every confirmed track as it is deleted; must not block or raise. docs/outside-store.md.
+        self.retire_sink = retire_sink
         self._max_pending_frames = max_pending_classification_frames
         self._pending_classification = deque()
         # Sized from the capture config at construction, because that is when
@@ -423,6 +426,8 @@ class Tracker:
                 fragment.alive = False
             if track.state_status == TrackState.ACTIVE or track.n_associated >= M_THRESHOLD():
                 self.all_tracks.append(track)
+            if track.id and self.retire_sink is not None:
+                self.retire_sink.retire(track, self.run_id)
         self.tracks = [t for t in self.tracks if not t.should_delete()]
 
         stitch_cutoff = timestamp - STITCH_WINDOW_S * 1000
