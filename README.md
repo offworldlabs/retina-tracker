@@ -116,7 +116,7 @@ Each line is a self-contained track update:
 - `adsb_initialized`: Whether track was initialized with ADS-B data
 - `timestamp`: Event timestamp (ms)
 - `length`: Total detections associated with this track
-- `detections`: Rolling window of recent measurements (up to 20)
+- `detections`: Detections not already written for this track. A track's first event carries every detection it took before it was confirmed, up to 20, the one that started it included
 
 ### Tracks JSON (`-o` flag)
 

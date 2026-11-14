@@ -370,7 +370,9 @@ class Tracker:
                             max_velocity_ms=track.max_velocity_ms,
                         )
                     else:
-                        detections_list = track.get_recent_detections(n=_det_n)
+                        detections_list = track.get_recent_detections(
+                            n=min(track.n_observations, self.detection_window)
+                        )
                         self.event_writer.write_event(
                             track.id,
                             timestamp,
@@ -685,7 +687,7 @@ class Tracker:
                 self._stitch(track)
 
                 if self.event_writer:
-                    detections_list = track.get_recent_detections(n=track.n_associated)
+                    detections_list = track.get_recent_detections(n=track.n_observations)
                     self.event_writer.write_event(
                         track.id,
                         timestamp,
