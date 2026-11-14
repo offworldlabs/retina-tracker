@@ -4,7 +4,6 @@ retire() runs on the frame thread and only queues. flush() runs on the writer th
 history read and disk write. Neither may raise into its caller. See docs/outside-store.md.
 """
 
-import bisect
 import json
 import os
 import sqlite3
@@ -26,9 +25,6 @@ MAX_PENDING = 1000
 MAX_BYTES = 256 * 1024 * 1024
 MIN_FREE_BYTES = 1024 * 1024 * 1024
 MAX_RECORD_POINTS = 50_000
-NEAR_DELAY_KM = 5.0
-NEAR_DOPPLER_HZ = 100.0
-EXTRAPOLATE_BASE_MS = 2_000
 POLL_S = 1.0
 LIST_LIMIT = 50
 MAX_LIST_LIMIT = 500
@@ -134,37 +130,9 @@ def _stride(n):
     return max(1, -(-n // MAX_RECORD_POINTS))
 
 
-def _segment(times, t):
-    """The two track points whose line gives its position at t: neighbours inside its life, a 2 s baseline outside."""
-    n = len(times)
-    i = bisect.bisect_left(times, t)
-    if 0 < i < n:
-        return i - 1, i
-    if i == 0:
-        return 0, min(n - 1, bisect.bisect_left(times, times[0] + EXTRAPOLATE_BASE_MS))
-    return max(0, bisect.bisect_right(times, times[-1] - EXTRAPOLATE_BASE_MS) - 1), n - 1
-
-
-def _position(track, t):
-    times = track["t"]
-    a, b = _segment(times, t)
-    if times[b] == times[a]:
-        return track["delay"][a], track["doppler"][a]
-    w = (t - times[a]) / (times[b] - times[a])
-    delay, doppler = track["delay"], track["doppler"]
-    return delay[a] + w * (delay[b] - delay[a]), doppler[a] + w * (doppler[b] - doppler[a])
-
-
-def _near(cols, track, own=frozenset()):
-    """The points of cols within NEAR_DELAY_KM and NEAR_DOPPLER_HZ of where the track was at the same time."""
-    keep = []
-    if track["t"]:
-        for i, (t, delay, doppler) in enumerate(zip(cols["t"], cols["delay"], cols["doppler"])):
-            if (t, delay, doppler) in own:
-                continue
-            at_delay, at_doppler = _position(track, t)
-            if abs(delay - at_delay) <= NEAR_DELAY_KM and abs(doppler - at_doppler) <= NEAR_DOPPLER_HZ:
-                keep.append(i)
+def _without(cols, own):
+    """cols less the points in own, matched on (t, delay, doppler)."""
+    keep = [i for i, point in enumerate(zip(cols["t"], cols["delay"], cols["doppler"])) if point not in own]
     return {k: [v[i] for i in keep] if isinstance(v, list) else v for k, v in cols.items()}
 
 
@@ -308,10 +276,9 @@ class OutsideStore:
         points.pop("meta", None)
         start, end = item["birth_ms"] - MARGIN_MS, item["last_ms"] + MARGIN_MS
         around = self.history.window(start, end, exclude=item["track_id"])
-        in_window = sum(_count(c) for c in around["detections"].values())
         own = set(zip(points["t"], points["delay"], points["doppler"]))
-        detections = {k: _near(c, points, own) for k, c in around["detections"].items()}
-        tracks = {k: near for k, c in around["tracks"].items() if (near := _near(c, points))["t"]}
+        detections = {k: _without(c, own) for k, c in around["detections"].items()}
+        tracks = around["tracks"]
         n_points = _count(points)
         n_neighbours = sum(_count(c) for c in detections.values()) + sum(_count(c) for c in tracks.values())
         track_stride, stride = _stride(n_points), _stride(n_neighbours)
@@ -327,9 +294,6 @@ class OutsideStore:
             neighbours={
                 "start_ms": start,
                 "end_ms": end,
-                "delay_km": NEAR_DELAY_KM,
-                "doppler_hz": NEAR_DOPPLER_HZ,
-                "in_window": in_window,
                 "total": n_neighbours,
                 "stride": stride,
                 "detections": {k: _thin(c, stride) for k, c in detections.items()},

@@ -68,35 +68,26 @@ feed that stopped: the record is written with what the history holds.
 | `n_detections`, `n_frames`, `mean_snr`, `max_velocity_ms`, `shadow_fraction`, `interference_fraction` | What the tracker thought of it |
 | `n_points`, `complete` | Points the history held for it, and whether that is every detection it took. False when the history was cleared or had evicted it |
 | `track` | Its points as columns `t`, `delay` (km), `doppler` (Hz), `snr` (dB), `lat`, `lon` (verified ADS-B position or null), plus `stride` |
-| `neighbours` | `start_ms`, `end_ms` (the track's span plus 10 s each side), `delay_km`, `doppler_hz` (the tube), `in_window` (detections in the window before the tube), `total` (kept), `stride`, `detections` (kept detections by class, as columns) and `tracks` (other tracks' points inside the tube, with their meta) |
+| `neighbours` | `start_ms`, `end_ms` (the track's span plus 10 s each side), `total`, `stride`, `detections` (every detection on the node in the window, by class, as columns, less the track's own) and `tracks` (every other track's points in the window, with its meta) |
 | `radar`, `location` | The radar settings and RX/TX positions the tracker ran with, so a record still makes sense after a re-tower |
 | `schema`, `stored_ms`, `id` | Format version, wall-clock write time, store id |
 
 Columns are the history's wire form, rounded the same way, so whatever draws `/events` can draw a
 record.
 
-**Neighbours are local to the track.** A detection from the window is kept only if it lies within
-`NEAR_DELAY_KM` (5 km) and `NEAR_DOPPLER_HZ` (100 Hz) of where the track was at that detection's
-time: a tube that follows the track through delay-Doppler.
+**Neighbours are the whole map.** Every detection the node classified in the window is kept,
+across its whole delay and Doppler span, with every other track's points in the window. What is
+going on around a track, a mirror image, a second aircraft, a burst of interference, is often
+nowhere near it in delay-Doppler. The track's own detections are left out of `detections`, since
+`track` already holds them; nothing else is filtered. A track the history no longer holds still
+gets its window, from the birth and last times the tracker reported.
 
-- Inside the track's life its position is interpolated between its two neighbouring points.
-- Before its first point and after its last, it is projected along the line through its end and
-  the point at least `EXTRAPOLATE_BASE_MS` (2 s) further in, so one noisy point cannot swing it.
-  The 10 s margins therefore show what was heading into and out of the track, not a box around
-  where it started and stopped.
-- The track's own detections are left out of the neighbours, since `track` already holds them.
-- Other tracks keep only their points inside the tube, and are left out if none are.
-- A track the history no longer holds has no path, so its record keeps no neighbours.
+Measured over 4 h history snapshots with a ±10 s window, a track has 290-440 neighbours at the
+median and about 1,000 at p90 (jn1, ffb, jn2), 10-35 kB of JSON before compression.
 
-5 km covers the tracker's 3 km shadow window (`shadow.delay_km`), where multipath and sidelobe
-replicas sit, and 100 Hz covers their Doppler offsets, measured at a median of 35 Hz. Both are in
-physical units rather than resolution cells, because they describe what a reader wants to see
-around a track, not a tracker threshold.
-
-Measured over 4 h history snapshots with a ±10 s window, the tube keeps 3-8% of the detections in
-the window: a median of 11-17 neighbours a track, p90 28-90, the most 627 (ffb), against 290-440
-at the median for the whole window. Before the tube, records were 10-35 kB of JSON and carried every
-detection on the node in the window.
+A tube was tried on 2026-11-14: keeping only detections within 5 km and 100 Hz of where the track
+was at the time, projected along its line in the margins. It kept 3-8% of the window and cut
+records to about half a kilobyte, and was set aside because the whole map is what a reader wants.
 
 **Per-record cap.** `track` and the neighbours each stay under `MAX_RECORD_POINTS` (50,000) by
 keeping every `stride`-th point, `stride` recorded. Only a track lasting hours reaches it. Thinning
@@ -128,8 +119,8 @@ every one of them. The rules for any change to it:
 - A change that cannot be additive bumps `SCHEMA` and migrates the existing file in place, inside
   one transaction, when the new release first opens it. It never sets the file aside or starts a
   fresh one: setting aside is for corruption only.
-- Each record carries `schema` and the parameters it was built with (`limit_hz`, the tube, the
-  window, `radar`), so changing a parameter later is not a schema change: old records still say
+- Each record carries `schema` and the parameters it was built with (`limit_hz`, the window,
+  `radar`), so changing a parameter later is not a schema change: old records still say
   what they were built under.
 - `tests/fixtures/outside_store_schema1.sql` is a store written by this first release (two
   records, one with neighbours and one without). A test opens it with the current code, lists
@@ -173,15 +164,15 @@ At the floor it therefore stays the size it was, give or take a page. The WAL be
 4 MiB (`journal_size_limit`) and is not counted in the cap. Lowering `--outside-max-mb` later trims
 the records to fit but not the file, which would need a VACUUM.
 
-Sizing, from records built out of 4 h history snapshots: the track and its tube compress to a
-median of 0.4-0.6 kB and p90 0.8-1.8 kB, and the radar context adds a few hundred bytes. A synthetic
-fast target with a multipath replica (56 points, 43 neighbours) stored at 1.5 kB.
+Sizing, from records built out of 4 h history snapshots (track, neighbours and other tracks,
+compressed about 3.7 times): a median of 3.5-3.9 kB, p90 8-11 kB, the largest 49 kB. A real jn2
+track with 521 neighbours stored at 5.0 kB. The 5-minute limit bounds the largest possible record.
 
 | | Records a day | Per day | 256 MiB lasts |
 | --- | --- | --- | --- |
-| jn2 (545 MHz), October rate | about 46 | about 50 kB | over 10 years |
-| jn1, ffb (213 MHz) | about one every few days | about 1 kB | indefinitely |
-| An interferer beyond 300 Hz, at ffb's tone rate | about 4,000 | 4-8 MB | 1-2 months |
+| jn2 (545 MHz), October rate | about 46 | about 230 kB | about 3 years |
+| jn1, ffb (213 MHz) | about one every few days | a few kB | indefinitely |
+| An interferer beyond 300 Hz, at ffb's tone rate | about 4,000 | about 20 MB | about 13 days |
 
 The cards measured on 2026-11-14 (owl-ded9 and jonathan-node-1) are 64 GB, with a 24 GB `/data`
 partition holding 15-18 GB free, so 256 MiB is under 2% of it. Other nodes were not checked; the

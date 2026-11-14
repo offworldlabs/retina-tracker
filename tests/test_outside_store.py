@@ -23,8 +23,6 @@ from retina_tracker.outside import (
     MARGIN_MS,
     MAX_TRACK_MS,
     MAX_WAIT_S,
-    NEAR_DELAY_KM,
-    NEAR_DOPPLER_HZ,
     OutsideStore,
 )
 from retina_tracker.track import OUTSIDE_DOPPLER_HZ, Track
@@ -137,14 +135,11 @@ def test_a_confirmed_track_that_went_outside_is_stored_with_its_points_and_neigh
     window = record["neighbours"]
     assert window["start_ms"] == record["birth_ms"] - MARGIN_MS
     assert window["end_ms"] == record["last_ms"] + MARGIN_MS
-    assert window["in_window"] == 60
+    assert window["total"] == 40
     assert window["detections"]["associated"]["t"] == []
     kept = window["detections"]["unassociated"]
     assert sum(1 for d in kept["doppler"] if d == FAST - 30.0) == 20
-    assert len(kept["t"]) < 40
-    for t, delay, doppler in zip(kept["t"], kept["delay"], kept["doppler"]):
-        at_delay, at_doppler = outside._position(record["track"], t)
-        assert abs(delay - at_delay) <= NEAR_DELAY_KM and abs(doppler - at_doppler) <= NEAR_DOPPLER_HZ
+    assert len(kept["t"]) == 40
     assert summary["track_id"] not in window["tracks"]
     assert record["radar"]["center_frequency"] == get_config()["radar"]["center_frequency"]
 
@@ -284,60 +279,48 @@ def history_with_track(track_id, start_ms=5_000, end_ms=10_000, delay=10.0, dela
     return history
 
 
-def stored_neighbours(store, track):
+def store_record(store, track):
     store.retire(track, "run")
     store.flush(force=True)
-    return store.record(store.records()[0]["id"])["neighbours"]
+    return store.record(store.records()[0]["id"])
 
 
-def test_only_detections_near_the_track_at_the_time_are_kept(tmp_path):
+def stored_neighbours(store, track):
+    return store_record(store, track)["neighbours"]
+
+
+def test_every_detection_in_the_window_is_kept_however_far_from_the_track(tmp_path):
     history = history_with_track("261114-000001")
+    history.write_detections(7_000, [{"delay": 10.0, "doppler": 350.0, "snr": 12.0}], [], [])
     history.write_detections(
-        7_500,
-        [],
-        [
-            {"delay": 14.9, "doppler": 449.0, "snr": 6.0},
-            {"delay": 15.2, "doppler": 350.0, "snr": 6.0},
-            {"delay": 10.0, "doppler": 249.0, "snr": 6.0},
-            {"delay": 10.0, "doppler": -350.0, "snr": 6.0},
-        ],
-        [],
+        7_500, [], [{"delay": 10.5, "doppler": 360.0, "snr": 6.0}, {"delay": 55.0, "doppler": -900.0, "snr": 6.0}], []
     )
+    history.write_detections(21_000, [], [{"delay": 10.5, "doppler": 360.0, "snr": 6.0}], [])
     neighbours = stored_neighbours(make_store(tmp_path, history), FakeTrack("261114-000001"))
     kept = neighbours["detections"]["unassociated"]
-    assert list(zip(kept["delay"], kept["doppler"])) == [(14.9, 449.0)]
-    assert (neighbours["in_window"], neighbours["total"]) == (4, 1)
-    assert (neighbours["delay_km"], neighbours["doppler_hz"]) == (NEAR_DELAY_KM, NEAR_DOPPLER_HZ)
+    assert list(zip(kept["delay"], kept["doppler"])) == [(10.5, 360.0), (55.0, -900.0)]
+    assert neighbours["detections"]["associated"]["t"] == []
+    assert neighbours["total"] == 2
 
 
-def test_before_and_after_the_track_the_tube_follows_its_line(tmp_path):
-    history = history_with_track("261114-000001", delay_rate=0.5)
-    before = {"delay": 10.0 - 0.5 * 4 + 4.5, "doppler": 350.0, "snr": 6.0}
-    left_behind = {"delay": 10.0 + 4.0, "doppler": 350.0, "snr": 6.0}
-    history.write_detections(1_000, [], [before, left_behind], [])
-    after = {"delay": 12.5 + 0.5 * 6 - 4.5, "doppler": 350.0, "snr": 6.0}
-    history.write_detections(16_000, [], [after], [])
-    neighbours = stored_neighbours(make_store(tmp_path, history), FakeTrack("261114-000001"))
-    kept = neighbours["detections"]["unassociated"]
-    assert list(zip(kept["t"], kept["delay"])) == [(1_000, before["delay"]), (16_000, after["delay"])]
-
-
-def test_other_tracks_keep_only_their_points_near_the_track(tmp_path):
+def test_other_tracks_keep_all_their_points_in_the_window(tmp_path):
     history = history_with_track("261114-000001")
-    near = [{"timestamp": 6_000, "delay": 11.0, "doppler": 330.0, "snr": 9.0}]
-    far = [{"timestamp": 6_500, "delay": 40.0, "doppler": 330.0, "snr": 9.0}]
-    history.write_event("261114-000002", 6_500, 2, near + far)
-    history.write_event("261114-000003", 6_500, 1, [{"timestamp": 6_500, "delay": 10.0, "doppler": -80.0, "snr": 9.0}])
+    points = [
+        {"timestamp": 6_000, "delay": 11.0, "doppler": 330.0, "snr": 9.0},
+        {"timestamp": 6_500, "delay": 40.0, "doppler": -330.0, "snr": 9.0},
+    ]
+    history.write_event("261114-000002", 6_500, 2, points)
+    history.write_event("261114-000003", 25_000, 1, [{"timestamp": 25_000, "delay": 10.0, "doppler": 1.0, "snr": 9.0}])
     neighbours = stored_neighbours(make_store(tmp_path, history), FakeTrack("261114-000001"))
     assert list(neighbours["tracks"]) == ["261114-000002"]
-    assert neighbours["tracks"]["261114-000002"]["t"] == [6_000]
+    assert neighbours["tracks"]["261114-000002"]["t"] == [6_000, 6_500]
 
 
-def test_a_track_the_history_no_longer_holds_keeps_no_neighbours(tmp_path):
+def test_a_track_the_history_no_longer_holds_still_keeps_its_window(tmp_path):
     history = DetectionHistory()
     history.write_detections(7_500, [], [clutter(1)], [])
-    neighbours = stored_neighbours(make_store(tmp_path, history), FakeTrack("261114-000001"))
-    assert (neighbours["in_window"], neighbours["total"]) == (1, 0)
+    record = store_record(make_store(tmp_path, history), FakeTrack("261114-000001"))
+    assert (record["complete"], record["n_points"], record["neighbours"]["total"]) == (False, 0, 1)
 
 
 def test_neighbours_are_thinned_to_the_record_cap(tmp_path, monkeypatch):
