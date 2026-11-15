@@ -207,6 +207,28 @@ is counted as dropped.
 `file_bytes` (the whole database file, free pages included), `max_bytes`, `min_free_bytes`, and
 `free_bytes` (the free space seen at the last write, null before one).
 
+## Measured
+
+On owl-ded9 (Raspberry Pi 5, 2 GB, SD card) on 2026-11-15, in the v0.6.0 image with this code
+mounted, fed recorded and synthetic frames over TCP as fast as the tracker would take them.
+
+| Check | Result |
+| --- | --- |
+| Ingest, 4 h of fairforest B, 3 runs each | 340.5 frames/s without the store, 330.1 with it (3% slower). A live node sends 2 |
+| Worst-case record: a 5-minute track, about 35 detections a second per class | 23,040 neighbours; history lock held 40 ms, build 77 ms, compress and commit 122 ms, 133 KB |
+| Typical record, 7 detections a frame | 5,120 neighbours; lock 8 ms, build 15 ms, commit 26 ms, 37 KB |
+| Commit to the SD card, 200 records | p50 7.8 ms, p99 16.5 ms, max 32 ms |
+| Opening a full 256 MiB store (66,000 small rows) | 8.75 s with a cold cache, 0.43 s warm. A tracker on it answered `/health` after 2.7 s and took detections while the store opened (open after 15 s) |
+| `/health` on that full store | 210 ms, nearly all of it the `COUNT`/`SUM` over every row. 4 kB is the median real record, so this is what a full store costs; it runs on the control thread and only ever delays the writer |
+| jn1 (7 recordings, 181,508 frames), jn2 (2, 57,856), fairforest B (28,922) into one tracker each | 0, 5 and 0 records: the same records, field for field, as the replay on a laptop. Memory flat at 90-95 MiB, no restarts |
+| 12 h synthetic feed three times into a 1 MiB cap | 219 written, 118 rolled, the newest 101 kept with ids 119-219; pages in use stayed at 1,040,384 bytes |
+| A 5.5-minute target beyond 300 Hz | Counted `too_long`, not stored; the three ordinary targets in the same feed were |
+| Free space at the floor (1026 MiB tmpfs, then a 3 MB filler) | The file stayed at 634,880 bytes and rolled 57 records to take 73 new ones |
+| `kill -9` while writing, 20 times | Every committed record present, `integrity_check` ok, ids unique, nothing set aside |
+| Corrupt pages; corrupt header | `quick_check` ("Page 506: never used") and "file is not a database": set aside as `.bad`, a fresh store wrote the next records |
+| Missing directory; read-only directory | `disabled`, retirements counted as dropped, `/outside` 503, tracking unchanged |
+| Two trackers on one file | 73 records each, 146 in all, `integrity_check` ok, ids unique |
+
 ## Reading
 
 | Route | Answer |
