@@ -65,6 +65,7 @@ def test_track_points_and_metadata_are_kept(history):
     assert payload["tracks"]["T1"]["t"] == [BASE, BASE + 500]
     assert payload["tracks"]["T1"]["meta"] == {
         "adsb_hex": "4CA2D1",
+        "stitch_id": "T1",
         "length": 3,
         "max_velocity_ms": 231.6,
         "is_anomalous": True,

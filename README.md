@@ -97,7 +97,8 @@ Each line is a self-contained track update:
 
 ```json
 {
-  "track_id": "250618-A12345",
+  "track_id": "250618-00012C",
+  "stitch_id": "250618-000107",
   "adsb_hex": "a12345",
   "adsb_initialized": true,
   "timestamp": 1718747750000,
@@ -109,7 +110,8 @@ Each line is a self-contained track update:
 }
 ```
 
-- `track_id`: Unique ID in YYMMDD-XXXXXX (radar-only) or YYMMDD-ICAOHEX (ADS-B) format
+- `track_id`: Unique ID in YYMMDD-XXXXXX format, a sequential counter, never derived from the hex
+- `stitch_id`: The `track_id` of the first fragment of the chain this track continues, or its own id when it continues none (docs/stitching.md)
 - `adsb_hex`: ICAO hex identifier (null for radar-only tracks)
 - `adsb_initialized`: Whether track was initialized with ADS-B data
 - `timestamp`: Event timestamp (ms)

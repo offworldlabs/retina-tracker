@@ -4,6 +4,7 @@ import math
 import numbers
 import secrets
 from collections import OrderedDict, deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import numpy as np
@@ -29,11 +30,23 @@ from .config import (
     get_config,
     ordered_bounds,
 )
+from .history import WINDOW_S as STITCH_WINDOW_S
 from .interference import DopplerOccupancy
 from .kalman import KalmanFilter, delay_noise_scale, doppler_to_range_rate
 from .track import Track, TrackState
 
 MERGE_WINDOW_MS = 5000
+MIN_STITCH_LABELS = 2
+
+
+@dataclass
+class _Fragment:
+    stitch_id: str
+    last_ms: int
+    track_id: str
+    alive: bool = True
+
+
 MAX_COMPLETED_TRACKS = 50
 UNBOUNDED_ARCHIVE = None
 MAX_FRAME_DT_S = 60.0
@@ -83,6 +96,7 @@ class Tracker:
         self.kf = KalmanFilter()
         self.tracks = []
         self.all_tracks = []
+        self.latest_fragment = OrderedDict()
         self.completed_tracks = deque(maxlen=max_completed_tracks)
         self.last_timestamp = None
         self.detection_window = detection_window
@@ -122,6 +136,7 @@ class Tracker:
         """
         self.tracks = []
         self.all_tracks = []
+        self.latest_fragment.clear()
         self.completed_tracks.clear()
         self.last_timestamp = None
         self._pending_classification.clear()
@@ -289,6 +304,7 @@ class Tracker:
             track = self.tracks[track_idx]
             det = detections[det_idx]
             track.update(det, timestamp, frame=self.frame_count)
+            self._stitch(track)
             if self.innovation_writer:
                 self.innovation_writer.write_residual(track.id, timestamp, track, det)
             if track.state_status == TrackState.COASTING:
@@ -308,6 +324,7 @@ class Tracker:
                         _det_n,
                         track,
                         adsb_hex=track.adsb_hex,
+                        stitch_id=track.stitch_id or track.id,
                         adsb_initialized=track.adsb_initialized,
                         max_velocity_ms=track.max_velocity_ms,
                         shadow_fraction=track.shadow_fraction(),
@@ -321,6 +338,7 @@ class Tracker:
                         track.n_associated,
                         detections_window,
                         adsb_hex=track.adsb_hex,
+                        stitch_id=track.stitch_id or track.id,
                         adsb_initialized=track.adsb_initialized,
                         max_velocity_ms=track.max_velocity_ms,
                         shadow_fraction=track.shadow_fraction(),
@@ -337,6 +355,7 @@ class Tracker:
             promoted = track.promote_if_ready()
             if promoted:
                 track.id = Track._generate_id(timestamp)
+                self._stitch(track)
                 if self.event_writer:
                     _det_n = min(track.n_associated, self.detection_window)
                     if _lazy_write:
@@ -346,6 +365,7 @@ class Tracker:
                             _det_n,
                             track,
                             adsb_hex=track.adsb_hex,
+                            stitch_id=track.stitch_id or track.id,
                             adsb_initialized=track.adsb_initialized,
                             max_velocity_ms=track.max_velocity_ms,
                         )
@@ -357,6 +377,7 @@ class Tracker:
                             _det_n,
                             detections_list,
                             adsb_hex=track.adsb_hex,
+                            stitch_id=track.stitch_id or track.id,
                             adsb_initialized=track.adsb_initialized,
                             max_velocity_ms=track.max_velocity_ms,
                         )
@@ -395,9 +416,16 @@ class Tracker:
             # what makes "never confirmed" a settled answer instead of a
             # not-yet.
             track.retired = True
+            fragment = self.latest_fragment.get(track.adsb_hex)
+            if fragment is not None and fragment.track_id == track.id:
+                fragment.alive = False
             if track.state_status == TrackState.ACTIVE or track.n_associated >= M_THRESHOLD():
                 self.all_tracks.append(track)
         self.tracks = [t for t in self.tracks if not t.should_delete()]
+
+        stitch_cutoff = timestamp - STITCH_WINDOW_S * 1000
+        while self.latest_fragment and next(iter(self.latest_fragment.values())).last_ms < stitch_cutoff:
+            self.latest_fragment.popitem(last=False)
 
         # Entries older than the merge window can no longer be paired, so they
         # leave the O(window²) merge working set — but they stay reportable via
@@ -654,6 +682,7 @@ class Tracker:
                 track.state[2] = doppler_to_range_rate(doppler_velocity)
 
                 track.id = Track._generate_id(timestamp)
+                self._stitch(track)
 
                 if self.event_writer:
                     detections_list = track.get_recent_detections(n=track.n_associated)
@@ -663,11 +692,30 @@ class Tracker:
                         track.n_associated,
                         detections_list,
                         adsb_hex=track.adsb_hex,
+                        stitch_id=track.stitch_id or track.id,
                         adsb_initialized=track.adsb_initialized,
                         max_velocity_ms=track.max_velocity_ms,
                         shadow_fraction=track.shadow_fraction(),
                         interference_fraction=track.interference_fraction(),
                     )
+
+    def _stitch(self, track):
+        """Link a confirmed fragment carrying an ADS-B hex to that aircraft's previous one.
+
+        Decided once, when the track first has an id and its hex on MIN_STITCH_LABELS detections. The
+        previous fragment must have ended before this one began; while it is only coasting the decision
+        waits. See docs/stitching.md.
+        """
+        if not (track.id and track.adsb_hex) or track.n_labelled < MIN_STITCH_LABELS:
+            return
+        if track.stitch_id is None:
+            previous = self.latest_fragment.get(track.adsb_hex)
+            before = previous is not None and previous.last_ms < track.birth_timestamp
+            if before and previous.alive:
+                return
+            track.stitch_id = previous.stitch_id if before else track.id
+        self.latest_fragment[track.adsb_hex] = _Fragment(track.stitch_id, track.last_update_ms, track.id)
+        self.latest_fragment.move_to_end(track.adsb_hex)
 
     def _merge_tracks(self):
         if len(self.all_tracks) < 2:

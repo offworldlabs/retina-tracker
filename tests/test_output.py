@@ -36,6 +36,7 @@ def event_size():
         json.dumps(
             {
                 "track_id": "250618-000000",
+                "stitch_id": "250618-000000",
                 "adsb_hex": None,
                 "adsb_initialized": False,
                 "timestamp": 1718747750000,
