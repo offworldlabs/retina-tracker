@@ -11,7 +11,10 @@ import json
 
 import pytest
 
+from retina_tracker.config import get_config, load_config, set_config
 from retina_tracker.history import CLASSES, DetectionHistory
+from retina_tracker.kalman import doppler_to_range_rate
+from retina_tracker.tracker import Tracker
 
 BASE = 1789030000000
 
@@ -330,3 +333,17 @@ def test_the_footprint_is_what_it_claims():
     per_point = actual / n
     assert per_point < 32, per_point
     assert h.stats()["approx_bytes"] == n * 20
+
+
+@pytest.mark.parametrize("tracklets", [True, False])
+def test_every_detection_a_confirmed_track_took_reaches_the_history_its_first_included(tracklets):
+    set_config(load_config(None))
+    if not tracklets:
+        get_config()["tracklet"]["max_time_span"] = 0.0
+    history = DetectionHistory()
+    tracker = Tracker(event_writer=history, detection_sink=history)
+    step = doppler_to_range_rate(-100.0) * 0.5
+    for i in range(20):
+        tracker.process_frame([{"delay": 30.0 + i * step, "doppler": -100.0, "snr": 15.0}], i * 500)
+    track = next(t for t in tracker.tracks if t.id)
+    assert history.track(track.id)["t"] == [i * 500 for i in range(20)]

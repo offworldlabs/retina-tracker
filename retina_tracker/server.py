@@ -12,6 +12,8 @@ from .control import DEFAULT_PORT as CONTROL_PORT
 from .control import start_control_server
 from .coverage import Coverage, Geometry, start_saver
 from .history import MAX_POINTS, WINDOW_S, DetectionHistory, TeeEventWriter, start_pruner
+from .outside import MAX_BYTES as OUTSIDE_MAX_BYTES
+from .outside import OutsideStore, start_writer
 from .tracker import Tracker
 
 
@@ -178,6 +180,8 @@ def run_tcp_server(
     history_max_points=MAX_POINTS,
     innovation_writer=None,
     coverage_state_path=None,
+    outside_store_path=None,
+    outside_max_bytes=OUTSIDE_MAX_BYTES,
 ):
     """Run tracker as TCP server receiving detection frames from blah2.
 
@@ -193,6 +197,8 @@ def run_tcp_server(
         history_max_points: Hard ceiling per detection class, whatever the rate
         innovation_writer: InnovationWriter for R/Q calibration, or None
         coverage_state_path: Where the coverage wedge is saved across restarts, or None for memory only
+        outside_store_path: SQLite file for tracks that went beyond +/-300 Hz, or None for no store
+        outside_max_bytes: Stored payload size past which the oldest records are dropped
     """
     # In memory rather than on disk: it does not need to survive a restart,
     # and the alternative was several hundred megabytes a day onto an SD card.
@@ -207,6 +213,11 @@ def run_tcp_server(
         coverage.load()
         start_saver(coverage)
 
+    outside = None
+    if outside_store_path:
+        outside = OutsideStore(outside_store_path, history, max_bytes=outside_max_bytes)
+        start_writer(outside)
+
     tracker = Tracker(
         # The file's writer deduplicates detections, so it goes first and the
         # history records what was actually written.
@@ -215,6 +226,7 @@ def run_tcp_server(
         config=config or get_config(),
         detection_sink=history,
         innovation_writer=innovation_writer,
+        retire_sink=outside,
     )
     start_pruner(history)
 
@@ -225,7 +237,13 @@ def run_tcp_server(
 
     if control_port:
         control = start_control_server(
-            tracker, tracker_lock, host=control_host, port=control_port, history=history, coverage=coverage
+            tracker,
+            tracker_lock,
+            host=control_host,
+            port=control_port,
+            history=history,
+            coverage=coverage,
+            outside=outside,
         )
         print(f"Tracker control on {control_host}:{control.port}", file=sys.stderr)
 

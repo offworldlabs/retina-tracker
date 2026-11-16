@@ -108,18 +108,23 @@ def _drop_front(cols, n):
     return n
 
 
-def _slice(cols, start):
-    """The wire form of cols[start:], rounded. Track sets carry lat/lon, null where unverified."""
+def _slice(cols, start, end=None):
+    """The wire form of cols[start:end], rounded. Track sets carry lat/lon, null where unverified."""
     out = {
-        "t": list(cols["t"][start:]),
-        "delay": [round(v, DELAY_DP) for v in cols["delay"][start:]],
-        "doppler": [round(v, DOPPLER_DP) for v in cols["doppler"][start:]],
-        "snr": [round(v, SNR_DP) for v in cols["snr"][start:]],
+        "t": list(cols["t"][start:end]),
+        "delay": [round(v, DELAY_DP) for v in cols["delay"][start:end]],
+        "doppler": [round(v, DOPPLER_DP) for v in cols["doppler"][start:end]],
+        "snr": [round(v, SNR_DP) for v in cols["snr"][start:end]],
     }
     if "lat" in cols:
-        out["lat"] = _rounded_or_none(cols["lat"][start:], POSITION_DP)
-        out["lon"] = _rounded_or_none(cols["lon"][start:], POSITION_DP)
+        out["lat"] = _rounded_or_none(cols["lat"][start:end], POSITION_DP)
+        out["lon"] = _rounded_or_none(cols["lon"][start:end], POSITION_DP)
     return out
+
+
+def _between(cols, start_ms, end_ms):
+    times = cols["t"]
+    return _slice(cols, bisect.bisect_left(times, start_ms), bisect.bisect_right(times, end_ms))
 
 
 def _first_at_or_after(times, cutoff_ms):
@@ -154,6 +159,7 @@ class DetectionHistory:
         self._track_last_ts = {}  # id -> newest timestamp held
 
         self._gen = 0
+        self._released_ms = None
 
     # ── Writing ────────────────────────────────────────────────
 
@@ -166,6 +172,7 @@ class DetectionHistory:
                 for det in dets:
                     _append(cols, timestamp, det["delay"], det["doppler"], det.get("snr", 0.0))
                 self._enforce_ceiling(name)
+            self._released_ms = timestamp
 
     def write_event(
         self,
@@ -369,6 +376,24 @@ class DetectionHistory:
             if cols is None:
                 return None
             return dict(_slice(cols, 0), meta=self._track_meta.get(track_id, {}))
+
+    def released_ms(self):
+        """Timestamp of the newest frame whose classified detections have been written, or None."""
+        with self._lock:
+            return self._released_ms
+
+    def window(self, start_ms, end_ms, exclude=None):
+        """Every detection and every other track's points with start_ms <= t <= end_ms, in wire form."""
+        with self._lock:
+            detections = {name: _between(self._det[name], start_ms, end_ms) for name in CLASSES}
+            tracks = {}
+            for tid, cols in self._tracks.items():
+                if tid == exclude:
+                    continue
+                part = _between(cols, start_ms, end_ms)
+                if part["t"]:
+                    tracks[tid] = dict(part, meta=self._track_meta.get(tid, {}))
+            return {"detections": detections, "tracks": tracks}
 
     def latest(self, window_s=None, now_ms=None):
         """(track_id, timestamp, delay, adsb_hex) of each track's newest point inside the window."""

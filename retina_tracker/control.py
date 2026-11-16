@@ -34,6 +34,10 @@ Routes:
     GET  /coverage/arcs   the latest delay arc of each unlabelled track
     GET  /coverage/track/<id>
                           arcs spread over one track, for the page's replay
+    GET  /outside?before=<id>&limit=<n>
+                          summaries of stored tracks that went beyond
+                          +/-300 Hz, newest first (docs/outside-store.md)
+    GET  /outside/<id>    one stored track with its neighbouring detections
     POST /reset           clear the tracker, between search geometries
     POST /history/clear   clear the history, keep tracking
     POST /coverage/reset  clear the coverage wedge, keep tracking
@@ -54,6 +58,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .coverage import replay_arcs
+from .outside import LIST_LIMIT as OUTSIDE_LIST_LIMIT
+from .outside import SCHEMA as OUTSIDE_SCHEMA
+from .track import OUTSIDE_DOPPLER_HZ
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 30101
@@ -73,6 +80,17 @@ HEARTBEAT_S = 15.0
 MIN_WINDOW_S = 60
 
 TRACK_ID = re.compile(r"[A-Za-z0-9-]{1,40}")
+RECORD_ID = re.compile(r"[0-9]{1,18}")
+
+
+def _id_param(query, name):
+    """A positive whole number from the query string, None if absent. ValueError if malformed."""
+    raw = query.get(name, [None])[0]
+    if raw is None:
+        return None
+    if not RECORD_ID.fullmatch(raw) or int(raw) < 1:
+        raise ValueError(name)
+    return int(raw)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -145,6 +163,8 @@ class _Handler(BaseHTTPRequestHandler):
                 }
             if self.server.history is not None:
                 payload["history"] = self.server.history.stats()
+            if self.server.outside is not None:
+                payload["outside"] = self.server.outside.stats()
             self._send(200, payload)
             return
         if route == "/frame":
@@ -156,7 +176,41 @@ class _Handler(BaseHTTPRequestHandler):
         if route == "/coverage" or route.startswith("/coverage/"):
             self._coverage(route)
             return
+        if route == "/outside" or route.startswith("/outside/"):
+            self._outside(route)
+            return
         self._send(404, {"error": "not found"})
+
+    def _outside(self, route):
+        """Stored tracks that went beyond +/-300 Hz. See docs/outside-store.md#reading."""
+        store = self.server.outside
+        if store is None or store.state != "open":
+            reason = "outside store not enabled" if store is None else store.error or "outside store opening"
+            self._send(503, {"error": reason})
+            return
+        query = parse_qs(urlparse(self.path).query)
+        try:
+            if route == "/outside":
+                before = _id_param(query, "before")
+                limit = _id_param(query, "limit")
+                records = store.records(before=before, limit=OUTSIDE_LIST_LIMIT if limit is None else limit)
+                self._send(200, {"schema": OUTSIDE_SCHEMA, "limit_hz": OUTSIDE_DOPPLER_HZ, "records": records})
+                return
+            raw = route[len("/outside/") :]
+            if not RECORD_ID.fullmatch(raw):
+                self._send(400, {"error": "bad record id"})
+                return
+            record = store.record(int(raw))
+        except ValueError:
+            self._send(400, {"error": "bad query"})
+            return
+        except Exception as e:
+            self._send(500, {"error": f"outside store unreadable: {e}"})
+            return
+        if record is None:
+            self._send(404, {"error": "record not held"})
+            return
+        self._send(200, record)
 
     def _coverage(self, route):
         """The wedge, and arcs cut to it. See docs/coverage-wedge.md#endpoints."""
@@ -334,12 +388,15 @@ class ControlServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT, history=None, coverage=None):
+    def __init__(
+        self, tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT, history=None, coverage=None, outside=None
+    ):
         super().__init__((host, port), _Handler)
         self.tracker = tracker
         self.tracker_lock = tracker_lock
         self.history = history
         self.coverage = coverage
+        self.outside = outside
         # Lets an open stream wind down on shutdown instead of holding the
         # process up for a full interval.
         self.stopping = threading.Event()
@@ -361,12 +418,16 @@ def _has_points(delta):
     return any(cols["t"] for cols in delta["detections"].values())
 
 
-def start_control_server(tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT, history=None, coverage=None):
+def start_control_server(
+    tracker, tracker_lock, host=DEFAULT_HOST, port=DEFAULT_PORT, history=None, coverage=None, outside=None
+):
     """Serve the control surface on a daemon thread and return the server.
 
     The thread is a daemon so it never holds up interpreter shutdown: the
     tracker process is killed by its supervisor, not asked to wind down."""
-    server = ControlServer(tracker, tracker_lock, host=host, port=port, history=history, coverage=coverage)
+    server = ControlServer(
+        tracker, tracker_lock, host=host, port=port, history=history, coverage=coverage, outside=outside
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True, name="tracker-control")
     thread.start()
     server.thread = thread
