@@ -1,7 +1,7 @@
 """Measured statistics of a real blah2 detection stream.
 
-Provenance: a live capture of the Atlanta reference node (radar3.retnode.com,
-ADS-B enabled, on the standard +/-300 Hz envelope) taken 2026-09-07: 125 frames
+Provenance: a live capture of the Atlanta reference node (ADS-B
+enabled, on the standard +/-300 Hz envelope) taken 2026-09-07: 125 frames
 over 118 s, 1387 detections, 35 distinct aircraft. Every number below was
 measured from that capture, and `tests/test_synthetic.py` asserts the generator
 reproduces them.

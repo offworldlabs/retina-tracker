@@ -5,11 +5,10 @@ The delay and Doppler formulae here are a direct port of blah2-api's
 package emits and the `expected_delay` / `expected_doppler` it carries are
 consistent with what a real node would have computed for the same aircraft.
 
-Site defaults describe the Atlanta reference node. Its receiver position is the
-one committed in `retina_tracker/config.yaml`; its transmitter and centre
-frequency are NOT exposed by any node API, so the values here are a documented
-stand-in placed in the VHF-high broadcast band, chosen so the Doppler spread of
-the generated stream matches the measured reference. Point `Site` at real
+Site defaults are a placeholder site in the Atlanta area. The transmitter and
+centre frequency are NOT exposed by any node API, so the values here are a
+documented stand-in placed in the VHF-high broadcast band, chosen so the Doppler
+spread of the generated stream matches the measured reference. Point `Site` at real
 values whenever they are known: nothing else in this package assumes Atlanta.
 """
 
@@ -30,9 +29,9 @@ M_TO_FT = 1.0 / 0.3048
 
 @dataclass(frozen=True)
 class Site:
-    rx_lat: float = 33.939182
-    rx_lon: float = -84.651910
-    rx_alt: float = 290.0
+    rx_lat: float = 33.900000
+    rx_lon: float = -84.600000
+    rx_alt: float = 300.0
     tx_lat: float = 33.789000
     tx_lon: float = -84.335000
     tx_alt: float = 300.0
