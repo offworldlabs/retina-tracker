@@ -52,9 +52,9 @@ adsb:
   enabled: true               # Enable ADS-B-assisted track initialization
   priority: true              # Prefer ADS-B tracks in data association
   reference_location:         # Sensor location for ENU coordinate system
-    latitude: 33.939182       # Atlanta RX (Net13)
-    longitude: -84.651910
-    altitude: 290             # meters above WGS84 ellipsoid
+    latitude: 37.7644         # San Francisco (150 Mississippi)
+    longitude: -122.3954
+    altitude: 23              # meters above WGS84 ellipsoid
 
 # Paths (relative to repo root)
 paths:

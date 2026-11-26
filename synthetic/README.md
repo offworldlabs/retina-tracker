@@ -68,8 +68,8 @@ than reality. `profile.py` records the numbers.
 
 ### Site defaults
 
-The receiver is the Atlanta position committed in `retina_tracker/config.yaml`.
-The transmitter and `fc` are **not** exposed by any node API, so the defaults
+The receiver is a placeholder site in the Atlanta area. The transmitter and
+`fc` are **not** exposed by any node API, so the defaults
 are a documented stand-in in the VHF-high broadcast band chosen to match the
 observed Doppler spread. Pass real values to `Site` when they are known; nothing
 outside the defaults assumes Atlanta.
